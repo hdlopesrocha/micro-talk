@@ -1,0 +1,14 @@
+# Docker build context exclusions
+**/node_modules
+**/dist
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/venv
+models/
+data/
+*.pdf
+.env
+.git
+frontend/test-results
+coverage

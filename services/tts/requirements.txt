@@ -1,0 +1,7 @@
+piper-tts==1.8.0
+numpy==1.26.4
+onnxruntime==1.20.1
+huggingface-hub==0.27.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4

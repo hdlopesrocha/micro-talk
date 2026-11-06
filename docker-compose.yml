@@ -1,0 +1,363 @@
+name: microtalk
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-gateway-build: &gateway-build
+  context: .
+  dockerfile: services/gateway/Dockerfile
+
+x-gateway-environment: &gateway-environment
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  GATEWAY_DATA_DIR: /data/gateway
+  TTS_DATA_DIR: /data/tts
+  MEDIA_DATA_DIR: /data/media
+  PDF_SERVICE_URL: http://pdf-service:8001
+  TRANSLATION_SERVICE_URL: http://translation-service:8002
+  TTS_SERVICE_URL: http://tts-service:8003
+  SUMMARY_SERVICE_URL: http://summary-service:8004
+  MEDIA_SERVICE_URL: http://media-service:8005
+  REDIS_URL: redis://redis:6379/0
+  QUEUE_NAME: microtalk
+  JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-21600}
+  GATEWAY_RETENTION_HOURS: ${GATEWAY_RETENTION_HOURS:-168}
+  CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-1800}
+  CLEANUP_ENABLED: ${CLEANUP_ENABLED:-true}
+  GATEWAY_MAX_ACTIVE_JOBS: ${GATEWAY_MAX_ACTIVE_JOBS:-12}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+  GATEWAY_MAX_TEXT_CHARS: ${GATEWAY_MAX_TEXT_CHARS:-500000}
+  MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+  GATEWAY_AUTH_TOKEN: ${GATEWAY_AUTH_TOKEN:-}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-180}
+  UPLOAD_RATE_LIMIT_PER_MINUTE: ${UPLOAD_RATE_LIMIT_PER_MINUTE:-30}
+  JOB_RATE_LIMIT_PER_MINUTE: ${JOB_RATE_LIMIT_PER_MINUTE:-12}
+  SERVICE_REQUEST_TIMEOUT_SECONDS: ${SERVICE_REQUEST_TIMEOUT_SECONDS:-1800}
+  TTS_POLL_INTERVAL_SECONDS: ${TTS_POLL_INTERVAL_SECONDS:-1.5}
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    logging: *default-logging
+
+  pdf-service:
+    build:
+      context: .
+      dockerfile: services/pdf/Dockerfile
+    image: microtalk-pdf:local
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PDF_STORAGE_DIR: /data/documents
+      PDF_TMP_DIR: /data/tmp
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-2000}
+      MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+      OCR_ENABLED_DEFAULT: ${OCR_ENABLED_DEFAULT:-false}
+      OCR_LANGUAGES: ${OCR_LANGUAGES:-por+eng}
+      OCR_DPI: ${OCR_DPI:-200}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-180}
+      OCR_MIN_CHARS: ${OCR_MIN_CHARS:-40}
+      PDF_RETENTION_HOURS: ${PDF_RETENTION_HOURS:-168}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-3600}
+      CLEANUP_ENABLED: ${CLEANUP_ENABLED:-true}
+      CPU_THREADS: ${CPU_THREADS:-4}
+      OMP_NUM_THREADS: ${CPU_THREADS:-4}
+    volumes:
+      - pdf-data:/data/documents
+      - pdf-tmp:/data/tmp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 25s
+    logging: *default-logging
+
+  translation-service:
+    build:
+      context: .
+      dockerfile: services/translation/Dockerfile
+    image: microtalk-translation:local
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TRANSLATION_MODELS_DIR: /models/translation
+      TRANSLATION_MODEL_PT_EN: ${TRANSLATION_MODEL_PT_EN:-Helsinki-NLP/opus-mt-roa-en}
+      TRANSLATION_MODEL_EN_PT: ${TRANSLATION_MODEL_EN_PT:-Helsinki-NLP/opus-mt-tc-big-en-pt}
+      DEFAULT_SOURCE_LANGUAGE: ${DEFAULT_SOURCE_LANGUAGE:-pt}
+      DEFAULT_TARGET_LANGUAGE: ${DEFAULT_TARGET_LANGUAGE:-en}
+      MODEL_IDLE_UNLOAD_SECONDS: ${MODEL_IDLE_UNLOAD_SECONDS:-900}
+      CPU_THREADS: ${CPU_THREADS:-4}
+      OMP_NUM_THREADS: ${CPU_THREADS:-4}
+      MAX_TRANSLATION_CHARS: ${MAX_TRANSLATION_CHARS:-500000}
+      TRANSLATION_CHUNK_CHARS: ${TRANSLATION_CHUNK_CHARS:-850}
+      TRANSLATION_NUM_BEAMS: ${TRANSLATION_NUM_BEAMS:-2}
+      TRANSLATION_MAX_TOKENS: ${TRANSLATION_MAX_TOKENS:-512}
+      MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+    volumes:
+      - translation-models:/models/translation
+      - translation-cache:/models/.hf-cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  summary-service:
+    build:
+      context: .
+      dockerfile: services/summary/Dockerfile
+    image: microtalk-summary:local
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SUMMARY_MODELS_DIR: /models/summary
+      SUMMARY_MODEL_EN: ${SUMMARY_MODEL_EN:-farleyknight/cnn_dailymail-summarization-t5-small-2022-09-08}
+      SUMMARY_MODEL_PT: ${SUMMARY_MODEL_PT:-rhaymison/t5-portuguese-small-summarization}
+      SUMMARY_MODEL_EN_REVISION: ${SUMMARY_MODEL_EN_REVISION:-main}
+      SUMMARY_MODEL_PT_REVISION: ${SUMMARY_MODEL_PT_REVISION:-main}
+      SUMMARY_PROMPT_EN: "${SUMMARY_PROMPT_EN:-summarize: }"
+      SUMMARY_PROMPT_PT: "${SUMMARY_PROMPT_PT:-sumarize: }"
+      MODEL_IDLE_UNLOAD_SECONDS: ${MODEL_IDLE_UNLOAD_SECONDS:-900}
+      CPU_THREADS: ${CPU_THREADS:-4}
+      OMP_NUM_THREADS: ${CPU_THREADS:-4}
+      SUMMARY_MAX_INPUT_CHARS: ${SUMMARY_MAX_INPUT_CHARS:-500000}
+      SUMMARY_MAX_INPUT_TOKENS: ${SUMMARY_MAX_INPUT_TOKENS:-480}
+      SUMMARY_MAX_CHUNKS: ${SUMMARY_MAX_CHUNKS:-300}
+      SUMMARY_NUM_BEAMS: ${SUMMARY_NUM_BEAMS:-3}
+      SUMMARY_SHORT_TOKENS: ${SUMMARY_SHORT_TOKENS:-120}
+      SUMMARY_MEDIUM_TOKENS: ${SUMMARY_MEDIUM_TOKENS:-240}
+      SUMMARY_LONG_TOKENS: ${SUMMARY_LONG_TOKENS:-420}
+      TRANSLATION_SERVICE_URL: http://translation-service:8002
+      SUMMARY_TRANSLATION_TIMEOUT: ${SUMMARY_TRANSLATION_TIMEOUT:-900}
+      MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+    volumes:
+      - summary-models:/models/summary
+      - summary-cache:/models/.hf-cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  tts-service:
+    build:
+      context: .
+      dockerfile: services/tts/Dockerfile
+    image: microtalk-tts:local
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TTS_DATA_DIR: /data/tts
+      PIPER_VOICES_DIR: /models/piper
+      DEFAULT_TTS_VOICE: ${DEFAULT_TTS_VOICE:-pt-PT-tugao}
+      DEFAULT_TTS_LANGUAGE: ${DEFAULT_TTS_LANGUAGE:-pt-PT}
+      DEFAULT_TTS_SPEED: ${DEFAULT_TTS_SPEED:-1.0}
+      TTS_MAX_TEXT_CHARS: ${TTS_MAX_TEXT_CHARS:-500000}
+      TTS_MAX_SENTENCES: ${TTS_MAX_SENTENCES:-5000}
+      TTS_MAX_SEGMENT_CHARS: ${TTS_MAX_SEGMENT_CHARS:-400}
+      TTS_SENTENCE_GAP_MS: ${TTS_SENTENCE_GAP_MS:-120}
+      TTS_MAX_QUEUE: ${TTS_MAX_QUEUE:-20}
+      TTS_ENABLE_WAV: ${TTS_ENABLE_WAV:-true}
+      TTS_RETENTION_HOURS: ${TTS_RETENTION_HOURS:-72}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-3600}
+      CLEANUP_ENABLED: ${CLEANUP_ENABLED:-true}
+      MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+      FFMPEG_TIMEOUT_SECONDS: ${FFMPEG_TIMEOUT_SECONDS:-900}
+    volumes:
+      - tts-data:/data/tts
+      - piper-models:/models/piper
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  media-service:
+    build:
+      context: .
+      dockerfile: services/media/Dockerfile
+    image: microtalk-media:local
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MEDIA_STORAGE_DIR: /data/media
+      TTS_SOURCE_DIR: /data/tts
+      MEDIA_TMP_DIR: /data/media/tmp
+      MEDIA_MAX_UPLOAD_MB: ${MEDIA_MAX_UPLOAD_MB:-500}
+      MINIMUM_FREE_DISK_MB: ${MINIMUM_FREE_DISK_MB:-500}
+      FFMPEG_TIMEOUT_SECONDS: ${FFMPEG_TIMEOUT_SECONDS:-900}
+      FFPROBE_TIMEOUT_SECONDS: ${FFPROBE_TIMEOUT_SECONDS:-60}
+      MEDIA_MP3_BITRATE: ${MEDIA_MP3_BITRATE:-128k}
+      SUBTITLE_WORDS_PER_MINUTE: ${SUBTITLE_WORDS_PER_MINUTE:-150}
+      MEDIA_RETENTION_HOURS: ${MEDIA_RETENTION_HOURS:-168}
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-3600}
+      CLEANUP_ENABLED: ${CLEANUP_ENABLED:-true}
+    volumes:
+      - media-data:/data/media
+      - tts-data:/data/tts:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  gateway:
+    build: *gateway-build
+    image: microtalk-gateway:local
+    restart: unless-stopped
+    environment: *gateway-environment
+    volumes:
+      - gateway-data:/data/gateway
+      - tts-data:/data/tts:ro
+      - media-data:/data/media:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      pdf-service:
+        condition: service_healthy
+      translation-service:
+        condition: service_healthy
+      summary-service:
+        condition: service_healthy
+      tts-service:
+        condition: service_healthy
+      media-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 25s
+    stop_grace_period: 30s
+    logging: *default-logging
+
+  gateway-worker:
+    build: *gateway-build
+    image: microtalk-gateway:local
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment: *gateway-environment
+    volumes:
+      - gateway-data:/data/gateway
+      - tts-data:/data/tts:ro
+      - media-data:/data/media:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      pdf-service:
+        condition: service_healthy
+      translation-service:
+        condition: service_healthy
+      summary-service:
+        condition: service_healthy
+      tts-service:
+        condition: service_healthy
+      media-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import socket;
+          from redis import Redis;
+          from rq import Queue, Worker;
+          from app.config import settings;
+          connection = Redis.from_url(settings.redis_url);
+          queue = Queue(settings.queue_name, connection=connection);
+          workers = Worker.all(connection=connection, queue=queue);
+          hostname = socket.gethostname();
+          assert any(worker.hostname == hostname and worker.pid == 1 for worker in workers), "RQ worker is not registered"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 60s
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: microtalk-frontend:local
+    restart: unless-stopped
+    ports:
+      - "${MICROTALK_PORT:-8080}:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+
+volumes:
+  redis-data:
+  pdf-data:
+  pdf-tmp:
+  tts-data:
+  media-data:
+  gateway-data:
+  translation-models:
+  translation-cache:
+  summary-models:
+  summary-cache:
+  piper-models:

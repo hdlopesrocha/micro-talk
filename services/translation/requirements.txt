@@ -1,0 +1,14 @@
+# CPU-only PyTorch: the explicit index keeps multi-gigabyte CUDA wheels out of
+# the image. No GPU is required for any MicroTalk feature.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+transformers==4.46.3
+accelerate==1.1.1
+sentencepiece==0.2.0
+safetensors==0.4.5
+huggingface-hub==0.27.1
+numpy==1.26.4
+langdetect==1.0.9
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
