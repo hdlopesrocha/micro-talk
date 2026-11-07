@@ -387,6 +387,8 @@ function onSaved(artifact: TextArtifact, warning: string | null) {
           <div v-if="job.source.filename"><dt>Source</dt><dd class="truncate" :title="job.source.filename">{{ job.source.filename }}</dd></div>
           <div v-if="job.source.selected_pages?.length"><dt>Pages</dt><dd>{{ job.source.selected_pages.length }} selected</dd></div>
           <div v-if="job.source.ocr_enabled"><dt>OCR</dt><dd>Enabled</dd></div>
+          <div v-if="job.source.ignore_notes"><dt>Notes</dt><dd>Ignored</dd></div>
+          <div v-if="job.source.ignore_figure_descriptions"><dt>Figure descriptions</dt><dd>Ignored</dd></div>
           <div><dt>Text language</dt><dd>{{ contentLanguage }}</dd></div>
           <div v-if="job.artifacts.summary"><dt>Summary language</dt><dd>{{ summaryLanguage }}</dd></div>
           <div v-if="job.config?.tts?.voice"><dt>Voice</dt><dd>{{ job.tts?.voice_name || job.config.tts.voice }}</dd></div>

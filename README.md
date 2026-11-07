@@ -214,6 +214,11 @@ translation is disabled. It is shared by translation, OCR hints, and narration
 voice matching. With `Detect automatically`, the language is resolved when the
 workflow starts and the selected voice is verified against it.
 
+PDF extraction can optionally **ignore notes** (page-bottom footnotes and
+`Note`/`Nota` blocks) and **ignore figure/table descriptions** (captions such as
+`Figure 1:`, `Fig. 2.`, `Tabela 3:` or `Table 4.`). Filtering is off by default
+and the number of removed blocks is reported in the job warnings and stats.
+
 OCR is off by default. Turn it on for scanned pages or pages with little
 extractable text. OCR uses Tesseract with `por+eng+fra` and runs at
 `OCR_DPI` (200 by default) inside the PDF service.

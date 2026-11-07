@@ -48,6 +48,8 @@ class PageSelection(BaseModel):
     end_page: int | None = Field(default=None, ge=1)
     selected_pages: list[int] | None = None
     ocr_enabled: bool = False
+    ignore_notes: bool = False
+    ignore_figure_descriptions: bool = False
 
     @model_validator(mode="after")
     def validate_range(self) -> "PageSelection":
@@ -338,6 +340,8 @@ async def extract(request: PageSelection) -> dict[str, Any]:
         selected_pages=pages,
         ocr_enabled=request.ocr_enabled,
         settings=settings,
+        ignore_notes=request.ignore_notes,
+        ignore_figure_descriptions=request.ignore_figure_descriptions,
     )
     result = {
         "document_id": request.document_id,
@@ -357,6 +361,8 @@ async def extract_as_txt(request: PageSelection) -> PlainTextResponse:
         selected_pages=pages,
         ocr_enabled=request.ocr_enabled,
         settings=settings,
+        ignore_notes=request.ignore_notes,
+        ignore_figure_descriptions=request.ignore_figure_descriptions,
     )
     stem = Path(meta["filename"]).stem
     filename = f"{stem}-extracted.txt"

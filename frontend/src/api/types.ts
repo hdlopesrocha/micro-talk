@@ -106,6 +106,8 @@ export interface InputConfig {
   end_page: number | null;
   selected_pages: number[] | null;
   ocr_enabled: boolean;
+  ignore_notes: boolean;
+  ignore_figure_descriptions: boolean;
 }
 
 export interface TranslationConfig {
@@ -241,6 +243,8 @@ export interface JobState {
     page_count?: number;
     selected_pages?: number[];
     ocr_enabled?: boolean;
+    ignore_notes?: boolean;
+    ignore_figure_descriptions?: boolean;
     likely_scanned?: boolean;
     size_bytes?: number;
   };
@@ -331,6 +335,8 @@ export interface CreateJobRequest {
     end_page?: number | null;
     selected_pages?: number[] | null;
     ocr_enabled: boolean;
+    ignore_notes?: boolean;
+    ignore_figure_descriptions?: boolean;
   };
   translation: TranslationConfig;
   summary: SummaryConfig;

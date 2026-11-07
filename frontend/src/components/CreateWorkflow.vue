@@ -45,6 +45,8 @@ const uploadError = ref("");
 const text = ref("");
 const sourceLanguage = ref<LanguageCode>("auto");
 const ocrEnabled = ref(false);
+const ignoreNotes = ref(false);
+const ignoreFigureDescriptions = ref(false);
 const pageMode = ref<PageMode>("all");
 const rangeStart = ref(1);
 const rangeEnd = ref(1);
@@ -429,6 +431,9 @@ async function startWorkflow() {
     type: sourceMode.value,
     language: sourceLanguage.value,
     ocr_enabled: sourceMode.value === "pdf" ? ocrEnabled.value : false,
+    ignore_notes: sourceMode.value === "pdf" ? ignoreNotes.value : false,
+    ignore_figure_descriptions:
+      sourceMode.value === "pdf" ? ignoreFigureDescriptions.value : false,
   };
   if (sourceMode.value === "pdf" && document.value) {
     input.document_id = document.value.id;
@@ -681,6 +686,26 @@ function installCommand(service: string): string {
                   <small>
                     Tesseract recognizes Portuguese, English and French. Slower, but works on scanned
                     pages and images.
+                  </small>
+                </span>
+              </label>
+
+              <label class="check ocr-check">
+                <input v-model="ignoreNotes" type="checkbox" />
+                <span class="check-text">
+                  Ignore notes
+                  <small>
+                    Skip page-bottom footnotes and blocks that start with Note/Nota/Notes headings.
+                  </small>
+                </span>
+              </label>
+
+              <label class="check ocr-check">
+                <input v-model="ignoreFigureDescriptions" type="checkbox" />
+                <span class="check-text">
+                  Ignore figure and table descriptions
+                  <small>
+                    Skip captions such as Figure 1:, Fig. 2., Tabela 3: or Table 4.
                   </small>
                 </span>
               </label>

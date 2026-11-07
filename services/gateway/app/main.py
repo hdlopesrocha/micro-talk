@@ -545,6 +545,8 @@ async def create_job(payload: JobCreateRequest, request: Request) -> dict[str, A
             "page_count": document.get("page_count"),
             "selected_pages": payload.input.selected_pages,
             "ocr_enabled": payload.input.ocr_enabled,
+            "ignore_notes": payload.input.ignore_notes,
+            "ignore_figure_descriptions": payload.input.ignore_figure_descriptions,
             "likely_scanned": document.get("likely_scanned"),
         }
     await run_in_threadpool(store.create, job_id, state)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ class Block:
     x1: float
     y1: float
     text: str
+    font_size: float = 0.0
 
     @property
     def width(self) -> float:
@@ -38,6 +40,125 @@ class Block:
     @property
     def center_y(self) -> float:
         return (self.y0 + self.y1) / 2.0
+
+
+_NOTE_PREFIX = re.compile(
+    r"^\s*(?:note|notes|nota|notas|footnote|footnotes|endnote|endnotes|"
+    r"rodap[ée]|reference|references|refer[êe]ncia|refer[êe]ncias)\s*[:.\-–—]\s*",
+    re.IGNORECASE,
+)
+_NOTE_HEADING = re.compile(
+    r"^\s*(?:notes?|notas?|footnotes?|endnotes?|rodap[ée]|references?|"
+    r"refer[êe]ncias?)\s*[:.]?\s*$",
+    re.IGNORECASE,
+)
+_FOOTNOTE_MARKER = re.compile(r"^\s*(?:\d{1,3}|[*†‡§¶#])\s+(?=\S)")
+_CAPTION_PREFIX = re.compile(
+    r"^\s*(?:fig(?:ure|ura)?\.?|table(?:au)?|tabela|quadro|chart|gr[áa]fico|"
+    r"graph(?:ique)?|image|imagem|photo|foto|illustration|ilustra[çc][ãa]o|"
+    r"map|mapa|plate|l[âa]mina|sch[ée]ma)\s*(?:n[ºo°]\.?\s*)?"
+    r"\d+(?:[.\-–—]\d+)*\s*(?=$|[:.\-–—])",
+    re.IGNORECASE,
+)
+_CREDIT_PREFIX = re.compile(
+    r"^\s*(?:source|fonte|credit|cr[ée]dit)\s*[:.\-–—]\s*",
+    re.IGNORECASE,
+)
+
+
+def _block_font_size(raw_block: dict[str, Any]) -> float:
+    sizes: list[float] = []
+    for line in raw_block.get("lines", []):
+        for span in line.get("spans", []):
+            text = str(span.get("text") or "")
+            size = float(span.get("size") or 0.0)
+            if text.strip() and size > 0:
+                # Weight by character count so a small superscript span cannot
+                # make a normal body block look like a footnote.
+                sizes.extend([size] * min(len(text), 200))
+    return float(statistics.median(sizes)) if sizes else 0.0
+
+
+def _body_font_size(blocks: list[Block]) -> float:
+    sizes: list[float] = []
+    for block in blocks:
+        if block.font_size and len(block.text) >= 40:
+            sizes.extend([block.font_size] * min(len(block.text), 300))
+    if not sizes:
+        sizes = [block.font_size for block in blocks if block.font_size]
+    return float(statistics.median(sizes)) if sizes else 0.0
+
+
+def _near_image(
+    block: Block,
+    image_boxes: list[tuple[float, float, float, float]],
+) -> bool:
+    for image_x0, image_y0, image_x1, image_y1 in image_boxes:
+        overlap = min(block.x1, image_x1) - max(block.x0, image_x0)
+        if overlap < min(block.width, image_x1 - image_x0) * 0.2:
+            continue
+        vertical_gap = max(0.0, max(image_y0 - block.y1, block.y0 - image_y1))
+        if vertical_gap <= 50:
+            return True
+    return False
+
+
+def _is_note_block(block: Block, page_height: float, body_size: float) -> bool:
+    text = block.text.strip()
+    if not text:
+        return False
+    if _NOTE_PREFIX.match(text) or _NOTE_HEADING.match(text):
+        return True
+    if block.y0 < page_height * 0.68 or len(text) > 700:
+        return False
+    if body_size and block.font_size and block.font_size <= body_size * 0.92:
+        return True
+    return bool(
+        block.y0 >= page_height * 0.75
+        and _FOOTNOTE_MARKER.match(text)
+        and block.font_size
+        and body_size
+        and block.font_size <= body_size * 0.97
+    )
+
+
+def _is_figure_description(text: str, *, near_image: bool = False) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) > 700:
+        return False
+    if _CAPTION_PREFIX.match(stripped):
+        return True
+    return bool(near_image and _CREDIT_PREFIX.match(stripped))
+
+
+def _is_note_paragraph(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # OCR has no reliable font/position metadata. Require an explicit note
+    # heading or "Note:"/"Nota:" prefix so numbered body text (including Bible
+    # verses) is never mistaken for a footnote.
+    return bool(_NOTE_PREFIX.match(stripped) or _NOTE_HEADING.match(stripped))
+
+
+def _filter_ocr_paragraphs(
+    paragraphs: list[str],
+    *,
+    ignore_notes: bool,
+    ignore_figure_descriptions: bool,
+) -> tuple[list[str], int, int]:
+    kept: list[str] = []
+    ignored_notes = 0
+    ignored_figures = 0
+    for paragraph in paragraphs:
+        if ignore_figure_descriptions and _is_figure_description(paragraph):
+            ignored_figures += 1
+            continue
+        if ignore_notes and _is_note_paragraph(paragraph):
+            ignored_notes += 1
+            continue
+        kept.append(paragraph)
+    return kept, ignored_notes, ignored_figures
 
 
 def inspect_pdf(path: Path, scanned_threshold: int = 40) -> dict[str, Any]:
@@ -117,7 +238,9 @@ def _line_text(block: dict[str, Any]) -> str:
     return clean_text(raw)
 
 
-def _blocks_from_page(page: fitz.Page) -> list[Block]:
+def _blocks_from_page(
+    page: fitz.Page,
+) -> tuple[list[Block], list[tuple[float, float, float, float]]]:
     try:
         data = page.get_text("dict", sort=False)
     except Exception as exc:  # pragma: no cover - corrupt PDFs
@@ -125,14 +248,18 @@ def _blocks_from_page(page: fitz.Page) -> list[Block]:
             "pdf_extraction_failed", "Text could not be extracted from a page.", status_code=422
         ) from exc
     blocks: list[Block] = []
+    image_boxes: list[tuple[float, float, float, float]] = []
     page_width = float(page.rect.width) or 1.0
     for raw_block in data.get("blocks", []):
+        x0, y0, x1, y1 = [float(v) for v in raw_block.get("bbox", (0, 0, 0, 0))]
+        if raw_block.get("type") == 1:
+            image_boxes.append((x0, y0, x1, y1))
+            continue
         if raw_block.get("type") != 0:
             continue
         text = _line_text(raw_block)
         if not text:
             continue
-        x0, y0, x1, y1 = [float(v) for v in raw_block.get("bbox", (0, 0, 0, 0))]
         # Drop obvious page furniture only when it is extremely short; otherwise
         # preserve all extracted content. Page numbers are repeated in each page
         # result anyway, and silently dropping body text is worse than keeping it.
@@ -140,8 +267,8 @@ def _blocks_from_page(page: fitz.Page) -> list[Block]:
             continue
         if (x1 - x0) > page_width * 2.5:
             continue
-        blocks.append(Block(x0, y0, x1, y1, text))
-    return blocks
+        blocks.append(Block(x0, y0, x1, y1, text, _block_font_size(raw_block)))
+    return blocks, image_boxes
 
 
 def _order_blocks(blocks: list[Block], page_width: float) -> list[Block]:
@@ -230,7 +357,13 @@ def _paragraphs_from_text(text: str) -> list[str]:
     return cleaned
 
 
-def _ocr_page(page: fitz.Page, settings: Settings) -> tuple[list[str], list[str]]:
+def _ocr_page(
+    page: fitz.Page,
+    settings: Settings,
+    *,
+    ignore_notes: bool,
+    ignore_figure_descriptions: bool,
+) -> tuple[list[str], list[str], int, int]:
     warnings: list[str] = []
     try:
         matrix = fitz.Matrix(settings.ocr_dpi / 72.0, settings.ocr_dpi / 72.0)
@@ -263,27 +396,64 @@ def _ocr_page(page: fitz.Page, settings: Settings) -> tuple[list[str], list[str]
         ) from exc
     if not text.strip():
         warnings.append("OCR found no text on this page.")
-    return _paragraphs_from_text(text), warnings
+    paragraphs = _paragraphs_from_text(text)
+    paragraphs, ignored_notes, ignored_figures = _filter_ocr_paragraphs(
+        paragraphs,
+        ignore_notes=ignore_notes,
+        ignore_figure_descriptions=ignore_figure_descriptions,
+    )
+    if ignored_notes or ignored_figures:
+        warnings.append(
+            f"Filtered {ignored_notes} note line(s) and "
+            f"{ignored_figures} figure/table description(s) from OCR."
+        )
+    return paragraphs, warnings, ignored_notes, ignored_figures
 
 
-def _page_text(page: fitz.Page, settings: Settings) -> tuple[list[str], str, list[str]]:
+def _page_text(
+    page: fitz.Page,
+    settings: Settings,
+    *,
+    ignore_notes: bool,
+    ignore_figure_descriptions: bool,
+) -> tuple[list[str], str, list[str], int, int]:
     try:
-        blocks = _blocks_from_page(page)
+        blocks, image_boxes = _blocks_from_page(page)
     except ServiceError:
         raise
     except Exception as exc:
         logger.warning("Unexpected text block error: %s", exc)
-        blocks = []
-    ordered = _order_blocks(blocks, float(page.rect.width))
+        blocks, image_boxes = [], []
+    body_size = _body_font_size(blocks)
+    page_height = float(page.rect.height) or 1.0
+    kept: list[Block] = []
+    ignored_notes = 0
+    ignored_figures = 0
+    for block in blocks:
+        if ignore_figure_descriptions and _is_figure_description(
+            block.text, near_image=_near_image(block, image_boxes)
+        ):
+            ignored_figures += 1
+            continue
+        if ignore_notes and _is_note_block(block, page_height, body_size):
+            ignored_notes += 1
+            continue
+        kept.append(block)
+    ordered = _order_blocks(kept, float(page.rect.width))
     paragraphs = [block.text for block in ordered if block.text.strip()]
     text = "\n\n".join(paragraphs).strip()
     warnings: list[str] = []
     method = "text"
+    if ignored_notes or ignored_figures:
+        warnings.append(
+            f"Filtered {ignored_notes} note block(s) and "
+            f"{ignored_figures} figure/table description(s)."
+        )
     if len(text) < settings.ocr_min_chars:
         warnings.append(
             "Little or no extractable text was found; this page may be scanned or image-based."
         )
-    return paragraphs, method, warnings
+    return paragraphs, method, warnings, ignored_notes, ignored_figures
 
 
 def extract_document(
@@ -292,6 +462,8 @@ def extract_document(
     selected_pages: list[int],
     ocr_enabled: bool,
     settings: Settings,
+    ignore_notes: bool = False,
+    ignore_figure_descriptions: bool = False,
 ) -> dict[str, Any]:
     if not path.is_file():
         raise ServiceError("document_not_found", "The PDF document could not be found.", status_code=404)
@@ -321,21 +493,35 @@ def extract_document(
         scanned_pages: list[int] = []
         empty_pages: list[int] = []
         ocr_pages: list[int] = []
+        ignored_notes_total = 0
+        ignored_figures_total = 0
         for page_number in selected_unique:
             page = document.load_page(page_number - 1)
-            paragraphs, method, warnings = _page_text(page, settings)
+            paragraphs, method, warnings, ignored_notes, ignored_figures = _page_text(
+                page,
+                settings,
+                ignore_notes=ignore_notes,
+                ignore_figure_descriptions=ignore_figure_descriptions,
+            )
             text = "\n\n".join(paragraphs).strip()
             scanned = len(text) < settings.ocr_min_chars
             if scanned:
                 scanned_pages.append(page_number)
             if scanned and ocr_enabled:
-                paragraphs, ocr_warnings = _ocr_page(page, settings)
+                paragraphs, ocr_warnings, ignored_notes, ignored_figures = _ocr_page(
+                    page,
+                    settings,
+                    ignore_notes=ignore_notes,
+                    ignore_figure_descriptions=ignore_figure_descriptions,
+                )
                 warnings.extend(ocr_warnings)
                 text = "\n\n".join(paragraphs).strip()
                 method = "ocr"
                 if text:
                     ocr_pages.append(page_number)
                 scanned = len(text) < settings.ocr_min_chars
+            ignored_notes_total += ignored_notes
+            ignored_figures_total += ignored_figures
             if not text:
                 empty_pages.append(page_number)
                 if not warnings:
@@ -349,6 +535,8 @@ def extract_document(
                     "word_count": len(re.findall(r"\b[\wÀ-ÿ'-]+\b", text)),
                     "extraction_method": method,
                     "needs_ocr": scanned,
+                    "ignored_notes": ignored_notes,
+                    "ignored_figure_descriptions": ignored_figures,
                     "warnings": sorted(set(warnings)),
                 }
             )
@@ -389,12 +577,19 @@ def extract_document(
             warnings.append(
                 "OCR was used for page(s): " + ", ".join(str(p) for p in ocr_pages) + "."
             )
+        if ignored_notes_total or ignored_figures_total:
+            warnings.append(
+                f"Ignored {ignored_notes_total} note block(s) and "
+                f"{ignored_figures_total} figure/table description(s) during extraction."
+            )
         return {
             "page_count": total_pages,
             "selected_pages": selected_unique,
             "pages": pages_payload,
             "plain_text": plain_text,
             "ocr_enabled": ocr_enabled,
+            "ignore_notes": ignore_notes,
+            "ignore_figure_descriptions": ignore_figure_descriptions,
             "scanned_pages": scanned_pages,
             "empty_pages": empty_pages,
             "ocr_pages": ocr_pages,
@@ -404,6 +599,8 @@ def extract_document(
                 "pages_with_text": extracted_pages,
                 "pages_without_text": len(empty_pages),
                 "characters": len(plain_text),
+                "ignored_notes": ignored_notes_total,
+                "ignored_figure_descriptions": ignored_figures_total,
             },
         }
     finally:

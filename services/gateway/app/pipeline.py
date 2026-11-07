@@ -379,6 +379,8 @@ class PipelineRunner:
             "page_count": page_count,
             "selected_pages": selected,
             "ocr_enabled": config.input.ocr_enabled,
+            "ignore_notes": config.input.ignore_notes,
+            "ignore_figure_descriptions": config.input.ignore_figure_descriptions,
             "likely_scanned": bool(document.get("likely_scanned")),
             "size_bytes": document.get("size_bytes"),
         }
@@ -396,6 +398,8 @@ class PipelineRunner:
             document_id,
             selected_pages=selected,
             ocr_enabled=config.input.ocr_enabled,
+            ignore_notes=config.input.ignore_notes,
+            ignore_figure_descriptions=config.input.ignore_figure_descriptions,
         )
         self._check_cancel()
         display_text = str(result.get("plain_text") or "")

@@ -218,6 +218,8 @@ class ServiceClients:
         *,
         selected_pages: list[int],
         ocr_enabled: bool,
+        ignore_notes: bool = False,
+        ignore_figure_descriptions: bool = False,
     ) -> dict[str, Any]:
         return self._json(
             "pdf",
@@ -227,6 +229,8 @@ class ServiceClients:
                 "document_id": document_id,
                 "selected_pages": selected_pages,
                 "ocr_enabled": ocr_enabled,
+                "ignore_notes": ignore_notes,
+                "ignore_figure_descriptions": ignore_figure_descriptions,
             },
         )
 

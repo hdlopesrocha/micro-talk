@@ -80,6 +80,56 @@ def test_extract_selected_pages_preserves_page_markers(tmp_path: Path, pdf_modul
     assert all(page["extraction_method"] == "text" for page in result["pages"])
 
 
+def test_extract_can_ignore_notes_and_figure_descriptions(tmp_path: Path, pdf_modules):
+    extractor, config = pdf_modules
+    path = tmp_path / "notes.pdf"
+    document = fitz.open()
+    page = document.new_page(width=595, height=842)
+    page.insert_text(
+        (72, 120),
+        "This is the main body paragraph. It contains enough readable text to "
+        "establish the normal body font size for the page.",
+        fontsize=11,
+    )
+    page.insert_text(
+        (72, 300),
+        "Figura 1: Descrição detalhada da figura principal.",
+        fontsize=9,
+    )
+    page.insert_text(
+        (72, 800),
+        "1 Nota de rodapé com informação complementar.",
+        fontsize=8,
+    )
+    document.save(path)
+    document.close()
+    settings = config.Settings(ocr_min_chars=10)
+
+    kept = extractor.extract_document(
+        path,
+        selected_pages=[1],
+        ocr_enabled=False,
+        settings=settings,
+    )
+    assert "Figura 1" in kept["plain_text"]
+    assert "Nota de rodapé" in kept["plain_text"]
+
+    filtered = extractor.extract_document(
+        path,
+        selected_pages=[1],
+        ocr_enabled=False,
+        settings=settings,
+        ignore_notes=True,
+        ignore_figure_descriptions=True,
+    )
+    assert "This is the main body paragraph" in filtered["plain_text"]
+    assert "Figura 1" not in filtered["plain_text"]
+    assert "Nota de rodapé" not in filtered["plain_text"]
+    assert filtered["stats"]["ignored_notes"] == 1
+    assert filtered["stats"]["ignored_figure_descriptions"] == 1
+    assert any("Ignored" in warning for warning in filtered["warnings"])
+
+
 def test_extract_rejects_out_of_range_pages(tmp_path: Path, pdf_modules):
     extractor, config = pdf_modules
     path = tmp_path / "sample.pdf"

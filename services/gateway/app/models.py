@@ -24,6 +24,8 @@ class InputConfig(BaseModel):
     end_page: int | None = Field(default=None, ge=1)
     selected_pages: list[int] | None = Field(default=None, max_length=2000)
     ocr_enabled: bool = False
+    ignore_notes: bool = False
+    ignore_figure_descriptions: bool = False
 
     @model_validator(mode="after")
     def validate_input(self) -> "InputConfig":
@@ -41,6 +43,10 @@ class InputConfig(BaseModel):
                 )
             if self.document_id or self.start_page or self.end_page or self.selected_pages:
                 raise ValueError("Page selection is only available for PDF input.")
+            if self.ignore_notes or self.ignore_figure_descriptions:
+                raise ValueError(
+                    "Note and figure filtering is only available for PDF input."
+                )
         if self.selected_pages is not None:
             if not self.selected_pages:
                 raise ValueError("selected_pages cannot be empty.")
