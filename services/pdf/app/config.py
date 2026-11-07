@@ -16,7 +16,7 @@ class Settings:
     max_pages: int = env_int("MAX_PDF_PAGES", 2000, minimum=1)
     minimum_free_mb: int = env_int("MINIMUM_FREE_DISK_MB", 500, minimum=1)
     ocr_enabled_default: bool = env_bool("OCR_ENABLED_DEFAULT", False)
-    ocr_languages: str = os.getenv("OCR_LANGUAGES", "por+eng")
+    ocr_languages: str = os.getenv("OCR_LANGUAGES", "por+eng+fra")
     ocr_dpi: int = env_int("OCR_DPI", 200, minimum=100)
     ocr_timeout_seconds: int = env_int("OCR_TIMEOUT_SECONDS", 180, minimum=10)
     ocr_min_chars: int = env_int("OCR_MIN_CHARS", 40, minimum=1)

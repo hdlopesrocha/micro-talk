@@ -10,6 +10,7 @@ from .text import (
     normalize_language,
     sentence_split,
     split_paragraphs,
+    strip_leading_number_markers,
     word_count,
 )
 
@@ -27,5 +28,6 @@ __all__ = [
     "normalize_language",
     "sentence_split",
     "split_paragraphs",
+    "strip_leading_number_markers",
     "word_count",
 ]

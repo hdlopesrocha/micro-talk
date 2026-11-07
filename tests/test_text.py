@@ -15,6 +15,7 @@ from micro_common.text import (
     safe_filename,
     sentence_split,
     split_long_piece,
+    strip_leading_number_markers,
     word_count,
 )
 
@@ -36,6 +37,28 @@ def test_sentence_split_splits_paragraph_lines():
     sentences = sentence_split("First line.\nSecond line. Third line.")
     assert len(sentences) == 3
     assert sentences[1] == "Second line."
+
+
+def test_strip_leading_number_markers_handles_bible_style_labels():
+    text = (
+        "1 No princípio criou Deus os céus e a terra.\n"
+        "2. E a terra era sem forma e vazia.\n"
+        "3) E disse Deus: Haja luz.\n"
+        "1:1 No princípio era o Verbo.\n"
+        "[4] E viu Deus a luz.\n"
+        "2024 foi um ano comum.\n"
+        "3.14 não é um número de versículo."
+    )
+    cleaned = strip_leading_number_markers(text)
+    assert cleaned.splitlines() == [
+        "No princípio criou Deus os céus e a terra.",
+        "E a terra era sem forma e vazia.",
+        "E disse Deus: Haja luz.",
+        "No princípio era o Verbo.",
+        "E viu Deus a luz.",
+        "2024 foi um ano comum.",
+        "3.14 não é um número de versículo.",
+    ]
 
 
 def test_split_long_piece_respects_limit_and_keeps_content():
@@ -90,8 +113,10 @@ def test_distribute_duration_is_monotonic_and_ends_at_total():
 def test_normalize_language_aliases():
     assert normalize_language("PT_br") == "pt"
     assert normalize_language("en-US") == "en"
+    assert normalize_language("fr-FR") == "fr"
+    assert normalize_language("français") == "fr"
     with pytest.raises(ValueError):
-        normalize_language("fr")
+        normalize_language("de")
 
 
 def test_safe_filename_strips_unsafe_characters():

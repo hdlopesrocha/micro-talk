@@ -26,6 +26,7 @@ class Voice:
     repo_config_path: str
     license: str
     description: str
+    gender: str = "unknown"
     pitch_supported: bool = False
 
     @property
@@ -70,6 +71,21 @@ VOICES: tuple[Voice, ...] = (
         description="European Portuguese neural voice, single speaker, 22.05 kHz.",
     ),
     Voice(
+        id="pt-PT-dii",
+        name="Dii",
+        language="pt-PT",
+        language_name="Portuguese (Portugal)",
+        engine="piper",
+        quality="high",
+        sample_rate=22050,
+        repo_id="OpenVoiceOS/pipertts_pt-PT_dii",
+        repo_model_path="dii_pt-PT.onnx",
+        repo_config_path="dii_pt-PT.onnx.json",
+        license="CC BY-NC-ND 4.0 (voice model)",
+        description="European Portuguese female neural voice, single speaker, 22.05 kHz.",
+        gender="female",
+    ),
+    Voice(
         id="pt-BR-faber",
         name="Faber",
         language="pt-BR",
@@ -82,6 +98,36 @@ VOICES: tuple[Voice, ...] = (
         repo_config_path="pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json",
         license="CC0 (voice dataset)",
         description="Brazilian Portuguese neural voice, single speaker, 22.05 kHz.",
+    ),
+    Voice(
+        id="pt-BR-dii",
+        name="Dii",
+        language="pt-BR",
+        language_name="Portuguese (Brazil)",
+        engine="piper",
+        quality="high",
+        sample_rate=22050,
+        repo_id="OpenVoiceOS/pipertts_pt-BR_dii",
+        repo_model_path="dii_pt-BR.onnx",
+        repo_config_path="dii_pt-BR.onnx.json",
+        license="CC BY-NC-ND 4.0 (voice model)",
+        description="Brazilian Portuguese female neural voice, single speaker, 22.05 kHz.",
+        gender="female",
+    ),
+    Voice(
+        id="fr-FR-siwis",
+        name="Siwis",
+        language="fr-FR",
+        language_name="French (France)",
+        engine="piper",
+        quality="medium",
+        sample_rate=22050,
+        repo_id="rhasspy/piper-voices",
+        repo_model_path="fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
+        repo_config_path="fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json",
+        license="CC-BY 4.0 (voice dataset)",
+        description="French female neural voice, single speaker, 22.05 kHz.",
+        gender="female",
     ),
     Voice(
         id="en-US-lessac",

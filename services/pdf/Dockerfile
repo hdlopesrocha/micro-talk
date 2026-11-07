@@ -12,6 +12,7 @@ RUN apt-get update \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-por \
+        tesseract-ocr-fra \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

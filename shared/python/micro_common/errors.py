@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -41,6 +42,32 @@ def error_body(code: str, message: str, details: dict[str, Any] | None = None) -
     }
 
 
+def _safe_validation_details(exc: RequestValidationError) -> dict[str, Any]:
+    """Keep validation context JSON-serializable.
+
+    Pydantic v2 puts the original ``ValueError`` object in ``ctx.error`` for
+    model validators. Feeding that directly to JSONResponse turns an expected
+    422 into an internal 500.
+    """
+    fields: list[dict[str, Any]] = []
+    for error in exc.errors():
+        safe: dict[str, Any] = {}
+        for key, value in error.items():
+            if key == "ctx" and isinstance(value, dict):
+                safe[key] = {str(ctx_key): str(ctx_value) for ctx_key, ctx_value in value.items()}
+            elif key == "input":
+                try:
+                    json.dumps(value)
+                except (TypeError, ValueError):
+                    safe[key] = str(value)
+                else:
+                    safe[key] = value
+            else:
+                safe[key] = value
+        fields.append(safe)
+    return {"fields": fields}
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ServiceError)
     async def service_error_handler(_request: Request, exc: ServiceError) -> JSONResponse:
@@ -55,7 +82,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
-        details = {"fields": exc.errors()}
+        details = _safe_validation_details(exc)
         return JSONResponse(
             status_code=422,
             content=error_body("validation_error", "The request contains invalid fields.", details),

@@ -6,8 +6,9 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
-export type LanguageCode = "auto" | "pt" | "pt-PT" | "pt-BR" | "en";
-export type OutputLanguage = "en" | "pt-PT" | "pt-BR";
+export type LanguageCode = "auto" | "pt" | "pt-PT" | "pt-BR" | "en" | "fr";
+export type OutputLanguage = "en" | "pt-PT" | "pt-BR" | "fr";
+export type SummaryLanguage = "en" | "pt-PT" | "pt-BR";
 
 export interface PDFDocument {
   id: string;
@@ -31,6 +32,7 @@ export interface Voice {
   sample_rate: number;
   license: string;
   description: string;
+  gender: "female" | "male" | "unknown";
   pitch_supported: boolean;
   available: boolean;
   download_hint: string | null;
@@ -52,6 +54,7 @@ export interface Catalog {
   translation_status?: {
     loaded_pair: string | null;
     supported_pairs: Record<string, boolean>;
+    supported_routes?: Record<string, boolean>;
     model_ids?: Record<string, string>;
     unavailable?: boolean;
   };
@@ -114,7 +117,7 @@ export interface TranslationConfig {
 export interface SummaryConfig {
   enabled: boolean;
   length: "short" | "medium" | "long";
-  language: OutputLanguage | null;
+  language: SummaryLanguage | null;
 }
 
 export interface TTSConfig {
@@ -123,6 +126,8 @@ export interface TTSConfig {
   speed: number;
   format: "mp3" | "wav";
   normalize_audio: boolean;
+  preserve_phrases: boolean;
+  ignore_leading_numbers: boolean;
   text_source: "content" | "summary";
 }
 

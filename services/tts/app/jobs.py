@@ -24,7 +24,13 @@ from micro_common.storage import (
     relative_to_root,
     resolve_relative,
 )
-from micro_common.text import clean_text, sentence_split, split_long_piece, split_paragraphs
+from micro_common.text import (
+    clean_text,
+    sentence_split,
+    split_long_piece,
+    split_paragraphs,
+    strip_leading_number_markers,
+)
 
 from .config import Settings
 from .voices import Voice, get_voice, language_matches
@@ -111,11 +117,35 @@ class PiperSynthesizer:
             self._voice_id = None
 
 
-def split_speech_segments(text: str, language: str, max_chars: int) -> list[str]:
+def split_speech_segments(
+    text: str,
+    language: str,
+    max_chars: int,
+    *,
+    preserve_phrases: bool = False,
+    ignore_leading_numbers: bool = False,
+    phrase_max_chars: int | None = None,
+) -> list[str]:
+    """Split speech text into sentence-sized chunks.
+
+    ``preserve_phrases`` keeps a sentence in one piece up to
+    ``phrase_max_chars`` (the hard safety cap) instead of splitting it at the
+    first comma when it exceeds ``max_chars``. ``ignore_leading_numbers`` drops
+    Bible-style verse labels at the start of lines and sentences before the
+    text is synthesized, so they are not spoken or shown in subtitles.
+    """
+    phrase_limit = max(max_chars, int(phrase_max_chars or max_chars))
     segments: list[str] = []
     for paragraph in split_paragraphs(text):
+        if ignore_leading_numbers:
+            paragraph = strip_leading_number_markers(paragraph)
         for sentence in sentence_split(paragraph, language):
-            for piece in split_long_piece(sentence, max_chars):
+            if ignore_leading_numbers:
+                sentence = strip_leading_number_markers(sentence)
+                if not sentence.strip():
+                    continue
+            limit = phrase_limit if preserve_phrases else max_chars
+            for piece in split_long_piece(sentence, limit):
                 cleaned = clean_text(piece)
                 if cleaned and any(char.isalnum() for char in cleaned):
                     segments.append(cleaned)
@@ -254,7 +284,16 @@ class TTSJobManager:
                 },
             )
         check_disk_space(self.root, self.settings.minimum_free_mb)
-        segments = split_speech_segments(text, voice.language, self.settings.max_segment_chars)
+        preserve_phrases = bool(request.get("preserve_phrases", True))
+        ignore_leading_numbers = bool(request.get("ignore_leading_numbers", False))
+        segments = split_speech_segments(
+            text,
+            voice.language,
+            self.settings.max_segment_chars,
+            preserve_phrases=preserve_phrases,
+            ignore_leading_numbers=ignore_leading_numbers,
+            phrase_max_chars=self.settings.phrase_max_chars,
+        )
         if not segments:
             raise ServiceError("empty_text", "No speakable sentences were found in the text.", status_code=422)
         if len(segments) > self.settings.max_sentences:
@@ -290,6 +329,8 @@ class TTSJobManager:
                 "pitch_supported": voice.pitch_supported,
                 "format": output_format,
                 "normalize_audio": bool(request.get("normalize_audio", False)),
+                "preserve_phrases": preserve_phrases,
+                "ignore_leading_numbers": ignore_leading_numbers,
                 "sentence_count": len(segments),
                 "completed_sentences": 0,
                 "characters": len(text),

@@ -149,6 +149,8 @@ def _language_variant(canonical: str | None, target: str | None = None) -> str:
     value = (target or canonical or "en").lower().replace("_", "-")
     if value in {"pt", "pt-pt", "pt-br"}:
         return "pt-BR" if value == "pt-br" else "pt-PT"
+    if value in {"fr", "fr-fr", "fr-ca"}:
+        return "fr"
     return "en"
 
 
@@ -468,6 +470,8 @@ class PipelineRunner:
             return "pt-PT"
         if normalized == "en":
             return "en"
+        if normalized in {"fr", "fr-fr", "fr-ca"}:
+            return "fr"
         return None
 
     @staticmethod
@@ -495,7 +499,7 @@ class PipelineRunner:
         try:
             payload = self.clients.detect_language(text)
             canonical = payload.get("canonical") or payload.get("language")
-            if canonical in {"pt", "en"}:
+            if canonical in {"pt", "en", "fr"}:
                 return canonical, _language_variant(canonical)
         except ServiceCallError as exc:
             logger.info("Language detection unavailable: %s", exc.message)
@@ -676,6 +680,14 @@ class PipelineRunner:
         step_id = "summarize"
         self._begin(state, step_id, "Building a local summary.")
         source_canonical = str(content.get("content_canonical") or "en")
+        if source_canonical not in {"pt", "en"}:
+            raise PipelineFailure(
+                "summary_language_unsupported",
+                "Summarization is available only for English and Portuguese text. "
+                "Translate the document to English or Portuguese first, or disable summarization.",
+                details={"content_language": source_canonical},
+                http_status=422,
+            )
         if config.summary.language:
             summary_language = config.summary.language
         else:
@@ -802,6 +814,8 @@ class PipelineRunner:
                 "pitch": 0.0,
                 "format": config.tts.format,
                 "normalize_audio": False,
+                "preserve_phrases": config.tts.preserve_phrases,
+                "ignore_leading_numbers": config.tts.ignore_leading_numbers,
             }
         )
         tts_job_id = str(created.get("job_id") or "")

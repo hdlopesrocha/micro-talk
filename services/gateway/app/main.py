@@ -843,6 +843,8 @@ async def direct_tts(payload: DirectTTSRequest, request: Request) -> dict[str, A
             "pitch": 0.0,
             "format": payload.format,
             "normalize_audio": payload.normalize_audio,
+            "preserve_phrases": payload.preserve_phrases,
+            "ignore_leading_numbers": payload.ignore_leading_numbers,
         },
     )
     return _decorate_direct_tts(created)

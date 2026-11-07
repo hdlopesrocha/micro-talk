@@ -1,8 +1,8 @@
 # MicroTalk
 
 MicroTalk is a local-first document studio. Upload a PDF or paste text, extract
-the pages you need (with optional OCR), translate between Portuguese and English,
-summarize, narrate with local neural voices, and download synchronized audio,
+the pages you need (with optional OCR), translate between Portuguese, English
+and French, summarize, narrate with local neural voices, and download synchronized audio,
 subtitles, text, and a ZIP bundle. Everything runs on your machine with CPU-only
 models; no external inference API is used.
 
@@ -15,15 +15,18 @@ Docker network.
 - **Real PDF extraction** with PyMuPDF, layout-aware reading order, page
   previews, 1-based page ranges or arbitrary page sets, and Tesseract OCR for
   scanned pages. Scanned documents are detected at upload time.
-- **PT ↔ EN translation** with local Hugging Face Marian/OPUS-MT models,
+- **PT / EN / FR translation** with local Hugging Face Marian/OPUS-MT models,
   automatic language detection, page/paragraph-preserving segments, and
-  sentence-aware chunking.
+  sentence-aware chunking. Portuguese↔French is routed through English because
+  the local catalog uses direct PT↔EN and EN↔FR models.
 - **Hierarchical summarization** with compact local T5 models in English and
   Portuguese. Long documents are chunked and reduced recursively; a summary can
   be requested in the other language and is translated locally.
-- **Piper speech synthesis** with three fixed voices (European Portuguese,
-  Brazilian Portuguese, US English), selectable speed, MP3 or WAV output, and
-  optional FFmpeg normalization.
+- **Piper speech synthesis** with six fixed voices (European Portuguese,
+  Brazilian Portuguese, US English, female Dii voices for both Portuguese
+  variants, and French Siwis), selectable speed, MP3 or WAV output, and optional
+  FFmpeg normalization. The narrator can keep long sentences whole and ignore
+  Bible-style verse numbers at the start of phrases.
 - **Subtitle timings from actual audio.** Piper writes one WAV per sentence; the
   TTS service concatenates those files and records their real start/end times.
   The media service then aligns the cues to the final encoded audio and produces
@@ -83,7 +86,7 @@ in dedicated persistent volumes.
 | gateway | `http://gateway:8000` | Public API, validation, SQLite jobs, SSE, artifacts |
 | gateway-worker | — | RQ worker running the extraction/translation/summary/TTS/media pipeline |
 | pdf-service | `http://pdf-service:8001` | Upload/inspect/extract/preview, OCR, document retention |
-| translation-service | `http://translation-service:8002` | PT→EN and EN→PT local translation |
+| translation-service | `http://translation-service:8002` | PT/EN/FR local translation; PT↔FR pivots through English |
 | tts-service | `http://tts-service:8003` | Piper synthesis, sentence WAVs, timeline, MP3/WAV |
 | summary-service | `http://summary-service:8004` | Hierarchical local summarization |
 | media-service | `http://media-service:8005` | FFmpeg transcode/normalize/merge, SRT from real timings |
@@ -93,7 +96,7 @@ in dedicated persistent volumes.
 
 | Volume | Mount | Contents |
 | --- | --- | --- |
-| `translation-models` | `/models/translation` | PT↔EN model files |
+| `translation-models` | `/models/translation` | PT↔EN and EN↔FR model files |
 | `translation-cache` | `/models/.hf-cache` | Download cache for translation |
 | `summary-models` | `/models/summary` | EN/PT T5 model files |
 | `summary-cache` | `/models/.hf-cache` | Download cache for summaries |
@@ -178,9 +181,9 @@ docker compose run --rm tts-service download-models
 
 | Target | Models | Approximate download |
 | --- | --- | --- |
-| translation | `Helsinki-NLP/opus-mt-roa-en`, `Helsinki-NLP/opus-mt-tc-big-en-pt` | ~1.2 GB |
+| translation | PT↔EN (`opus-mt-roa-en`, `opus-mt-tc-big-en-pt`) and EN↔FR (`opus-mt-en-fr`, `opus-mt-fr-en`) | ~1.8 GB |
 | summary | `farleyknight/cnn_dailymail-summarization-t5-small-2022-09-08`, `rhaymison/t5-portuguese-small-summarization` | ~500 MB |
-| tts | Tugão (pt-PT), Faber (pt-BR), Lessac (en-US) Piper voices | ~200 MB |
+| tts | Tugão and Dii (pt-PT), Faber and Dii (pt-BR), Siwis (fr-FR), Lessac (en-US) Piper voices | ~380 MB |
 
 Sizes vary by repository revision. To use different models or revisions, set
 the variables in `.env` (see `.env.example`) **before** running the download
@@ -189,7 +192,10 @@ command, then restart the affected service.
 The images set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` for normal
 operation. After images and models are present, translation, summarization, OCR
 and speech do not contact the internet. Piper voices come from the
-`rhasspy/piper-voices` Hub repository only during the explicit download step.
+`rhasspy/piper-voices` and `OpenVoiceOS` Hub repositories only during the
+explicit download step. The Dii voice models are licensed
+CC BY-NC-ND 4.0, and the French Siwis voice uses CC-BY 4.0 data; check those
+licenses before commercial use.
 
 ## Using MicroTalk
 
@@ -203,24 +209,38 @@ and speech do not contact the internet. Piper voices come from the
   - **Custom pages** (click thumbnails, or enter comma-separated pages/ranges)
 - **Text**: paste up to `GATEWAY_MAX_TEXT_CHARS` characters (500,000 by default).
 
+**Document language** is always available in the Source step, even when
+translation is disabled. It is shared by translation, OCR hints, and narration
+voice matching. With `Detect automatically`, the language is resolved when the
+workflow starts and the selected voice is verified against it.
+
 OCR is off by default. Turn it on for scanned pages or pages with little
-extractable text. OCR uses Tesseract with `por+eng` and runs at
+extractable text. OCR uses Tesseract with `por+eng+fra` and runs at
 `OCR_DPI` (200 by default) inside the PDF service.
 
 ### 2. Choose processing
 
 - **Translate** is on by default with target English. Source language can be
-  `auto`, Portuguese, or English. Pages and paragraphs are preserved; the
-  translation result includes `--- Page N ---` markers for PDF input.
+  `auto`, Portuguese, English, or French; target language can be English,
+  Portuguese, or French. Pages and paragraphs are preserved; the translation
+  result includes `--- Page N ---` markers for PDF input. French↔Portuguese
+  uses the two direct English routes as a pivot.
 - **Summarize** is optional. Choose short/medium/long and either a fixed output
   language or follow the document language. If source and requested summary
   languages differ, the summary is generated in the source language and then
   translated by the local translation service.
 - **Narrate** is on by default. The final text language determines which voice
   is valid. The UI auto-selects a matching installed voice when possible and
-  warns about a mismatch. If you narrate a summary, choose whether the summary
-  language or the translated document language applies.
+  warns about a mismatch. French narration uses the French Siwis voice. If you
+  narrate a summary, choose whether the summary language or the translated
+  document language applies.
 - **Speech source**: narrate the full content or the generated summary.
+- **Keep sentences whole** is on by default: long sentences are not split at
+  commas for audio/subtitles, so phrases stay intact. A hard safety limit
+  (`TTS_PHRASE_MAX_CHARS`, 2000 by default) still splits extreme sentences.
+- **Ignore leading numbers** removes Bible-style verse labels such as
+  `1 No princípio…`, `2. E a terra…`, or `1:1` before narration and subtitles.
+  It is off by default.
 - **Speed** is 0.5–2.0. **Format** is MP3 or WAV. **Normalize** applies FFmpeg
   `dynaudnorm` when the media service finalizes the audio. Pitch is not offered
   because the bundled Piper voices do not support pitch shifting.
@@ -267,9 +287,9 @@ the browser never sends text to a third-party API.
 
 Subtitle accuracy is a core design constraint:
 
-1. The TTS service splits the text into sentences (with sentence-aware long-text
-   splitting), synthesizes each sentence to its own WAV file, and measures each
-   actual WAV file.
+1. The TTS service splits the text into sentences and keeps each sentence whole
+   by default (up to `TTS_PHRASE_MAX_CHARS`), synthesizes each sentence to its
+   own WAV file, and measures each actual WAV file.
 2. It concatenates the sentence WAVs with a configurable gap
    (`TTS_SENTENCE_GAP_MS`, 120 ms by default) and records exact start/end times
    for every sentence. This timeline is persisted as `timeline.json`.
@@ -309,10 +329,12 @@ empty `.env` is valid. The most useful settings:
 | `MODEL_IDLE_UNLOAD_SECONDS` | `900` | Unload idle translation/summary models; `0` keeps them |
 | `MINIMUM_FREE_DISK_MB` | `500` | Refuse expensive work below this free space |
 | `OCR_ENABLED_DEFAULT` | `false` | Default OCR toggle for new PDFs |
-| `OCR_LANGUAGES` | `por+eng` | Tesseract languages |
+| `OCR_LANGUAGES` | `por+eng+fra` | Tesseract languages |
 | `OCR_DPI` | `200` | OCR render DPI |
 | `DEFAULT_TTS_VOICE` | `pt-PT-tugao` | Initial voice |
 | `DEFAULT_TTS_SPEED` | `1.0` | Initial speed |
+| `TTS_MAX_SEGMENT_CHARS` | `400` | Segment size when phrase preservation is off |
+| `TTS_PHRASE_MAX_CHARS` | `2000` | Hard safety cap for keeping a sentence whole |
 | `TTS_MAX_QUEUE` | `20` | Active TTS jobs before HTTP 429 |
 | `MEDIA_MP3_BITRATE` | `128k` | Final MP3 bitrate |
 | `SUBTITLE_WORDS_PER_MINUTE` | `150` | Only for text-only estimated subtitle mode |
@@ -488,8 +510,8 @@ a different language than the final text. Translate to English and select
 `en-US-lessac`, or keep Portuguese and choose a `pt-PT`/`pt-BR` voice. If the
 source is `auto`, the error reports the detected language.
 
-**OCR is unavailable or poor.** The image installs `por` and `eng` Tesseract
-data. Use a higher `OCR_DPI` for small scans, select fewer pages, and inspect
+**OCR is unavailable or poor.** The image installs `por`, `eng`, and `fra`
+Tesseract data. Use a higher `OCR_DPI` for small scans, select fewer pages, and inspect
 the previews. OCR on large ranges is CPU-heavy.
 
 **SSE is buffered or disconnects through another proxy.** Nginx sets
@@ -518,8 +540,10 @@ pretending they completed.
 
 ## Limitations and honest caveats
 
-- Only Portuguese and English are supported by the installed translation and
-  summary models. OCR languages are limited to what the image installs.
+- Translation supports Portuguese, English, and French. Summarization still
+  supports only Portuguese and English, so French final text cannot be
+  summarized; translate it to EN/PT first or disable summarization. OCR
+  languages are limited to what the image installs.
 - Local CPU inference is slower than hosted GPUs. Long PDFs, OCR, and TTS take
   real time; progress reflects actual work, not a timer.
 - Subtitles are sentence-level. Timings come from actual sentence WAVs and are

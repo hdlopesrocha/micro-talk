@@ -20,6 +20,24 @@ _ABBREVIATIONS = {
 
 _ILLEGAL_FILENAME = re.compile(r"[^A-Za-z0-9._ -]+")
 
+# Bible-style verse labels: "1 ", "2. ", "3) ", "1:1 ", "12-13 " and
+# bracketed/parenthesized forms. The limit of three digits leaves years such as
+# 2024 alone, and the trailing separator must be followed by whitespace so
+# decimals such as 3.14 are not mistaken for verse labels.
+_LEADING_NUMBER_MARKER = re.compile(
+    r"^[ \t]*"
+    r"(?:[\[(]\s*)?"
+    r"\d{1,3}"
+    r"(?:\s*[:–—-]\s*\d{1,3})?"
+    r"(?:\s*[\])])?"
+    r"(?:\s*[.)\-–—:])?"
+    r"[ \t]+"
+)
+_NUMBER_MARKER_ONLY = re.compile(
+    r"^[ \t]*(?:[\[(]\s*)?\d{1,3}(?:\s*[:–—-]\s*\d{1,3})?"
+    r"(?:\s*[\])])?(?:\s*[.)\-–—:])?[ \t]*$"
+)
+
 
 def clean_text(value: str) -> str:
     """Normalize line endings, remove NULs and surplus spaces."""
@@ -29,6 +47,22 @@ def clean_text(value: str) -> str:
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def strip_leading_number_markers(text: str) -> str:
+    """Remove Bible-style verse numbers from the start of lines/phrases.
+
+    This is intentionally opt-in. It removes only short number labels (up to
+    three digits) at the start of a line; years and decimal values are left
+    untouched. Call it again on each sentence after ``sentence_split`` to handle
+    inline verses that follow a full stop.
+    """
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        if line.strip() and _NUMBER_MARKER_ONLY.fullmatch(line):
+            continue
+        lines.append(_LEADING_NUMBER_MARKER.sub("", line, count=1))
+    return "\n".join(lines)
 
 
 def split_paragraphs(text: str) -> list[str]:
@@ -249,6 +283,12 @@ def normalize_language(value: str | None, default: str = "en") -> str:
         "en-gb": "en",
         "english": "en",
         "inglês": "en",
+        "fr": "fr",
+        "fr-fr": "fr",
+        "fr-ca": "fr",
+        "french": "fr",
+        "français": "fr",
+        "francais": "fr",
     }
     if raw not in aliases:
         raise ValueError(f"Unsupported language: {value}")
@@ -256,7 +296,9 @@ def normalize_language(value: str | None, default: str = "en") -> str:
 
 
 def full_language_name(value: str) -> str:
-    return {"pt": "Portuguese", "en": "English"}.get(normalize_language(value), value)
+    return {"pt": "Portuguese", "en": "English", "fr": "French"}.get(
+        normalize_language(value), value
+    )
 
 
 def safe_filename(stem: str, suffix: str, fallback: str = "document") -> str:

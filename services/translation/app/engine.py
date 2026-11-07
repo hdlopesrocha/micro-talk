@@ -16,7 +16,7 @@ from micro_common.text import chunk_paragraph
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from .config import Settings
-from .languages import ResolvedLanguages
+from .languages import ResolvedLanguages, translation_route
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +48,6 @@ class TranslationEngine:
         except RuntimeError:
             pass
 
-    def _pair_name(self, languages: ResolvedLanguages) -> str:
-        if languages.source == languages.target:
-            return ""
-        return f"{languages.source}-{languages.target}"
-
     def _model_dir(self, pair: str) -> Path:
         return Path(self.settings.models_dir) / pair
 
@@ -78,16 +73,25 @@ class TranslationEngine:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            available = {
+                pair: self.model_available(pair)
+                for pair in self.settings.model_repos
+            }
+            routes = {
+                f"{source}-{target}": all(
+                    available[pair]
+                    for pair in translation_route(source, target)
+                )
+                for source in ("pt", "en", "fr")
+                for target in ("pt", "en", "fr")
+                if source != target
+            }
             return {
                 "loaded_pair": self._current.pair if self._current else None,
                 "loaded_since": self._current.loaded_at if self._current else None,
-                "supported_pairs": {
-                    pair: self.model_available(pair) for pair in ("pt-en", "en-pt")
-                },
-                "model_ids": {
-                    "pt-en": self.settings.model_pt_en_repo,
-                    "en-pt": self.settings.model_en_pt_repo,
-                },
+                "supported_pairs": available,
+                "supported_routes": routes,
+                "model_ids": dict(self.settings.model_repos),
                 "cpu_threads": self.settings.cpu_threads,
                 "device": "cpu",
             }
@@ -109,8 +113,8 @@ class TranslationEngine:
             except Exception:
                 pass
         folder = self._model_dir(pair)
+        repo = self.settings.model_repos.get(pair, pair)
         if not self.model_available(pair):
-            repo = self.settings.model_pt_en_repo if pair == "pt-en" else self.settings.model_en_pt_repo
             raise ServiceError(
                 "translation_model_missing",
                 "The required translation model has not been installed.",
@@ -185,6 +189,29 @@ class TranslationEngine:
                 translated.append(result)
         return " ".join(translated).strip()
 
+    def _translate_direct(
+        self,
+        segments: list[dict[str, Any]],
+        languages: ResolvedLanguages,
+        pair: str,
+    ) -> list[dict[str, Any]]:
+        loaded = self._load(pair)
+        output: list[dict[str, Any]] = []
+        for segment in segments:
+            if not segment["text"].strip():
+                translated = ""
+            else:
+                translated = self._translate_paragraph(segment["text"], loaded, languages)
+            output.append(
+                {
+                    "id": segment.get("id"),
+                    "page": segment.get("page"),
+                    "text": translated,
+                }
+            )
+        loaded.last_used = time.time()
+        return output
+
     def translate_segments(
         self,
         segments: list[dict[str, Any]],
@@ -199,24 +226,26 @@ class TranslationEngine:
                 }
                 for segment in segments
             ]
-        pair = self._pair_name(languages)
+        route = translation_route(languages.source, languages.target)
         with self._lock:
-            loaded = self._load(pair)
-            output: list[dict[str, Any]] = []
-            for segment in segments:
-                if not segment["text"].strip():
-                    translated = ""
-                else:
-                    translated = self._translate_paragraph(segment["text"], loaded, languages)
-                output.append(
-                    {
-                        "id": segment.get("id"),
-                        "page": segment.get("page"),
-                        "text": translated,
-                    }
-                )
-            loaded.last_used = time.time()
-            return output
+            if len(route) == 1:
+                return self._translate_direct(segments, languages, route[0])
+            # Portuguese↔French pivots through English. Translate the whole
+            # batch to English first so each model is loaded only once.
+            first_languages = ResolvedLanguages(
+                source=languages.source,
+                target="en",
+                target_variant="en",
+                detected=languages.detected,
+            )
+            english = self._translate_direct(segments, first_languages, route[0])
+            second_languages = ResolvedLanguages(
+                source="en",
+                target=languages.target,
+                target_variant=languages.target_variant,
+                detected=False,
+            )
+            return self._translate_direct(english, second_languages, route[1])
 
     def maybe_unload_idle(self) -> None:
         if not self.settings.idle_unload_seconds:

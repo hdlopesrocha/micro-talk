@@ -7,10 +7,15 @@ import zipfile
 from pathlib import Path
 from uuid import uuid4
 
+import json
+
 import pytest
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from micro_common.errors import ServiceError
+from micro_common.errors import ServiceError, install_error_handlers
 
 
 def test_text_update_rejects_blank_edits(service_module):
@@ -19,6 +24,63 @@ def test_text_update_rejects_blank_edits(service_module):
         models.TextUpdateRequest(text="   \n\t ")
     accepted = models.TextUpdateRequest(text="Edited paragraph.\n")
     assert accepted.text.startswith("Edited")
+
+
+def test_french_translation_is_accepted_but_french_summary_is_rejected(service_module):
+    models = service_module("gateway", "models")
+    request = models.JobCreateRequest(
+        input={"type": "text", "text": "Bonjour tout le monde.", "language": "fr"},
+        translation={"enabled": True, "source_language": "fr", "target_language": "en"},
+        summary={"enabled": False},
+        tts={"enabled": False},
+    )
+    assert request.translation.target_language == "en"
+
+    with pytest.raises(ValidationError):
+        models.JobCreateRequest(
+            input={"type": "text", "text": "Bonjour tout le monde.", "language": "fr"},
+            translation={"enabled": True, "source_language": "fr", "target_language": "fr"},
+            summary={"enabled": True},
+            tts={"enabled": False},
+        )
+
+
+def test_model_validator_errors_return_a_serializable_422():
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.post("/jobs")
+    def create():
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "summary"),
+                    "msg": "Value error, Summarization is unavailable for French.",
+                    "input": {"enabled": True},
+                    "ctx": {"error": ValueError("Summarization is unavailable for French.")},
+                }
+            ]
+        )
+
+    with TestClient(app) as client:
+        response = client.post("/jobs", json={})
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["error"]["code"] == "validation_error"
+    assert "Summarization" in str(payload["error"]["details"])
+    json.dumps(payload)  # The handler must never emit non-JSON ctx objects.
+
+
+def test_tts_config_keeps_phrases_and_can_ignore_leading_numbers(service_module):
+    models = service_module("gateway", "models")
+    config = models.TTSConfig()
+    assert config.preserve_phrases is True
+    assert config.ignore_leading_numbers is False
+
+    configured = models.TTSConfig(preserve_phrases=False, ignore_leading_numbers=True)
+    assert configured.preserve_phrases is False
+    assert configured.ignore_leading_numbers is True
 
 
 def test_job_store_lifecycle(tmp_path: Path, service_module):

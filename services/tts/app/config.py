@@ -17,6 +17,7 @@ class Settings:
     max_text_chars: int = env_int("TTS_MAX_TEXT_CHARS", 500_000, minimum=100)
     max_sentences: int = env_int("TTS_MAX_SENTENCES", 5000, minimum=1)
     max_segment_chars: int = env_int("TTS_MAX_SEGMENT_CHARS", 400, minimum=80)
+    phrase_max_chars: int = env_int("TTS_PHRASE_MAX_CHARS", 2000, minimum=80)
     gap_ms: int = env_int("TTS_SENTENCE_GAP_MS", 120, minimum=0)
     max_queue: int = env_int("TTS_MAX_QUEUE", 20, minimum=1)
     minimum_free_mb: int = env_int("MINIMUM_FREE_DISK_MB", 500, minimum=1)

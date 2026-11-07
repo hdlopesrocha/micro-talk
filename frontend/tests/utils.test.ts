@@ -43,6 +43,7 @@ describe("format helpers", () => {
     expect(statusLabel("completed")).toBe("Complete");
     expect(statusLabel("custom")).toBe("custom");
     expect(languageLabel("pt-BR")).toBe("Portuguese (Brazil)");
+    expect(languageLabel("fr")).toBe("French");
     expect(languageLabel(null)).toBe("—");
   });
 
@@ -78,7 +79,16 @@ function job(overrides: Partial<JobState> = {}): JobState {
       },
       translation: { enabled: true, source_language: "auto", target_language: "en" },
       summary: { enabled: false, length: "medium", language: null },
-      tts: { enabled: false, voice: "pt-PT-tugao", speed: 1, format: "mp3", normalize_audio: false, text_source: "content" },
+      tts: {
+        enabled: false,
+        voice: "pt-PT-tugao",
+        speed: 1,
+        format: "mp3",
+        normalize_audio: false,
+        preserve_phrases: true,
+        ignore_leading_numbers: false,
+        text_source: "content",
+      },
     },
     steps: [],
     artifacts: {},

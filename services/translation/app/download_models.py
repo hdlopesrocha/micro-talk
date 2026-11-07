@@ -29,10 +29,7 @@ def main() -> int:
     os.environ.pop("TRANSFORMERS_OFFLINE", None)
     from huggingface_hub import snapshot_download
 
-    targets = [
-        ("pt-en", settings.model_pt_en_repo),
-        ("en-pt", settings.model_en_pt_repo),
-    ]
+    targets = list(settings.model_repos.items())
     for pair, repo in targets:
         destination = Path(settings.models_dir) / pair
         destination.mkdir(parents=True, exist_ok=True)

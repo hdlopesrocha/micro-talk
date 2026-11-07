@@ -57,6 +57,8 @@ export function languageLabel(code: string | null | undefined): string {
     "pt-PT": "Portuguese (Portugal)",
     "pt-BR": "Portuguese (Brazil)",
     en: "English",
+    fr: "French",
+    "fr-FR": "French (France)",
     und: "Unknown",
   };
   return code ? labels[code] || code : "—";

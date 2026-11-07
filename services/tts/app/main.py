@@ -35,6 +35,8 @@ class TTSRequest(BaseModel):
     pitch: float = Field(default=0.0, ge=-24.0, le=24.0)
     format: Literal["mp3", "wav"] = "mp3"
     normalize_audio: bool = False
+    preserve_phrases: bool = True
+    ignore_leading_numbers: bool = False
 
 
 async def _cleanup_loop() -> None:
@@ -142,6 +144,8 @@ async def defaults() -> dict[str, Any]:
         "speed": settings.default_speed,
         "format": "mp3",
         "normalize_audio": False,
+        "preserve_phrases": True,
+        "ignore_leading_numbers": False,
     }
 
 
@@ -215,7 +219,14 @@ async def recent_jobs(limit: int = Query(default=20, ge=1, le=100)) -> dict[str,
 async def preview_chunks(request: dict[str, Any]) -> dict[str, Any]:
     text = str(request.get("text", ""))
     language = str(request.get("language") or settings.default_language)
-    sentences = split_speech_segments(text, language, settings.max_segment_chars)
+    sentences = split_speech_segments(
+        text,
+        language,
+        settings.max_segment_chars,
+        preserve_phrases=bool(request.get("preserve_phrases", True)),
+        ignore_leading_numbers=bool(request.get("ignore_leading_numbers", False)),
+        phrase_max_chars=settings.phrase_max_chars,
+    )
     return {"count": len(sentences), "segments": sentences[:200]}
 
 

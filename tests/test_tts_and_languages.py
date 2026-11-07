@@ -26,6 +26,40 @@ def test_split_speech_segments_skips_punctuation_only(service_module):
     assert jobs.split_speech_segments("... !!! ---", "en", 100) == []
 
 
+def test_split_speech_segments_can_ignore_bible_verse_numbers(service_module):
+    jobs = service_module("tts", "jobs")
+    text = (
+        "1 No princípio criou Deus os céus e a terra. "
+        "2 E a terra era sem forma e vazia."
+    )
+    numbered = jobs.split_speech_segments(text, "pt-PT", 400)
+    assert numbered[0].startswith("1 ")
+    assert numbered[1].startswith("2 ")
+
+    cleaned = jobs.split_speech_segments(
+        text, "pt-PT", 400, ignore_leading_numbers=True
+    )
+    assert cleaned[0].startswith("No princípio")
+    assert cleaned[1].startswith("E a terra")
+    assert all(not segment.startswith(("1 ", "2 ")) for segment in cleaned)
+
+
+def test_split_speech_segments_can_keep_long_sentences_whole(service_module):
+    jobs = service_module("tts", "jobs")
+    text = ("Esta é uma frase deliberadamente longa que continua, " * 8).strip() + "."
+    split = jobs.split_speech_segments(text, "pt-PT", max_chars=80)
+    assert len(split) > 1
+
+    preserved = jobs.split_speech_segments(
+        text,
+        "pt-PT",
+        max_chars=80,
+        preserve_phrases=True,
+        phrase_max_chars=2000,
+    )
+    assert preserved == [text]
+
+
 def test_voice_language_matching_requires_exact_regional_variant(service_module):
     voices = service_module("tts", "voices")
     assert voices.language_matches("pt", "pt-BR")
@@ -35,10 +69,27 @@ def test_voice_language_matching_requires_exact_regional_variant(service_module)
     assert voices.language_matches("en", "en-US")
 
 
+def test_portuguese_and_french_female_voices_are_catalogued(service_module):
+    voices = service_module("tts", "voices")
+    female_portuguese = {
+        voice.id
+        for voice in voices.VOICES
+        if voice.gender == "female" and voice.language.startswith("pt")
+    }
+    assert {"pt-PT-dii", "pt-BR-dii"} <= female_portuguese
+    french = next(voice for voice in voices.VOICES if voice.id == "fr-FR-siwis")
+    assert french.gender == "female"
+    assert french.language == "fr-FR"
+
+
 def test_translation_language_resolution_and_detection(service_module):
     languages = service_module("translation", "languages")
     assert languages.detect_language("This is an English document about local software.") == "en"
     assert languages.detect_language("Este é um documento em português sobre software local.") == "pt"
+    assert (
+        languages.detect_language("Ceci est un document français sur les logiciels locaux.")
+        == "fr"
+    )
 
     resolved = languages.resolve_languages("auto", "pt-BR", "Este é um texto em português.")
     assert resolved.source == "pt"
@@ -46,8 +97,27 @@ def test_translation_language_resolution_and_detection(service_module):
     assert resolved.target_variant == "pt-BR"
     assert resolved.detected is True
 
+    resolved_fr = languages.resolve_languages("auto", "en", "Bonjour tout le monde.")
+    assert resolved_fr.source == "fr"
+    assert resolved_fr.target == "en"
+    assert resolved_fr.detected is True
+
+    resolved_target = languages.resolve_languages("fr", "pt-PT", "Bonjour tout le monde.")
+    assert resolved_target.source == "fr"
+    assert resolved_target.target == "pt"
+    assert resolved_target.target_variant == "pt-PT"
+
     with pytest.raises(ServiceError):
-        languages.resolve_languages("fr", "en", "Bonjour")
+        languages.resolve_languages("de", "en", "Hallo")
+
+
+def test_translation_routes_use_english_pivot_for_portuguese_french(service_module):
+    languages = service_module("translation", "languages")
+    assert languages.translation_route("pt", "en") == ["pt-en"]
+    assert languages.translation_route("en", "fr") == ["en-fr"]
+    assert languages.translation_route("pt", "fr") == ["pt-en", "en-fr"]
+    assert languages.translation_route("fr", "pt") == ["fr-en", "en-pt"]
+    assert languages.translation_route("fr", "fr") == []
 
 
 def test_translation_segments_preserve_page_markers(service_module):

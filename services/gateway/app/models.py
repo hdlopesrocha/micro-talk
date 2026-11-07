@@ -8,8 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .config import settings
 
-Language = Literal["auto", "pt", "pt-PT", "pt-BR", "en"]
-OutputLanguage = Literal["en", "pt-PT", "pt-BR"]
+Language = Literal["auto", "pt", "pt-PT", "pt-BR", "en", "fr"]
+OutputLanguage = Literal["en", "pt-PT", "pt-BR", "fr"]
+SummaryLanguage = Literal["en", "pt-PT", "pt-BR"]
 
 
 class InputConfig(BaseModel):
@@ -93,7 +94,7 @@ class SummaryConfig(BaseModel):
     enabled: bool = False
     length: Literal["short", "medium", "long"] = "medium"
     # None follows the language of the text being summarized.
-    language: OutputLanguage | None = None
+    language: SummaryLanguage | None = None
 
 
 class TTSConfig(BaseModel):
@@ -104,6 +105,8 @@ class TTSConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     format: Literal["mp3", "wav"] = "mp3"
     normalize_audio: bool = False
+    preserve_phrases: bool = True
+    ignore_leading_numbers: bool = False
     text_source: Literal["content", "summary"] = "content"
 
 
@@ -120,6 +123,17 @@ class JobCreateRequest(BaseModel):
     def validate_pipeline(self) -> "JobCreateRequest":
         if self.tts.enabled and self.tts.text_source == "summary" and not self.summary.enabled:
             raise ValueError("TTS cannot narrate a summary when summarization is disabled.")
+        if self.summary.enabled:
+            if self.translation.enabled and self.translation.target_language == "fr":
+                raise ValueError(
+                    "Summarization is available only for English and Portuguese text. "
+                    "Disable summarization or choose an English/Portuguese translation target."
+                )
+            if not self.translation.enabled and self.input.language == "fr":
+                raise ValueError(
+                    "Summarization is available only for English and Portuguese text. "
+                    "Enable translation or disable summarization for French input."
+                )
         if not self.translation.enabled and not self.summary.enabled and not self.tts.enabled:
             # Extraction alone is still a valid result, but it is usually a
             # mistake when the request comes from the guided workflow.
@@ -155,7 +169,7 @@ class DirectSummaryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=settings.max_text_chars)
-    language: OutputLanguage = "en"
+    language: SummaryLanguage = "en"
     source_language: Language = "auto"
     length: Literal["short", "medium", "long"] = "medium"
 
@@ -169,3 +183,5 @@ class DirectTTSRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     format: Literal["mp3", "wav"] = "mp3"
     normalize_audio: bool = False
+    preserve_phrases: bool = True
+    ignore_leading_numbers: bool = False

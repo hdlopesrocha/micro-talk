@@ -18,7 +18,12 @@ from micro_common.text import normalize_language
 from .config import settings
 from .engine import TranslationEngine
 from .segments import segments_from_text
-from .languages import ResolvedLanguages, detect_language, resolve_languages
+from .languages import (
+    ResolvedLanguages,
+    detect_language,
+    resolve_languages,
+    translation_route,
+)
 
 configure_logging("translation-service")
 logger = logging.getLogger(__name__)
@@ -75,7 +80,7 @@ class TranslateResponse(BaseModel):
 
 
 def _language_label(code: str) -> str:
-    return {"pt": "Portuguese", "en": "English"}.get(code, code)
+    return {"pt": "Portuguese", "en": "English", "fr": "French"}.get(code, code)
 
 
 def _build_plain_text(segments: list[dict[str, Any]], pages_present: bool) -> str:
@@ -125,13 +130,11 @@ def _translate(request: TranslateRequest) -> dict[str, Any]:
                 page_map.setdefault(page, []).append(segment["text"])
         pages = [{"page": page, "text": "\n\n".join(parts)} for page, parts in sorted(page_map.items())]
     pair = f"{languages.source}-{languages.target}"
-    model = (
-        settings.model_pt_en_repo
-        if (languages.source, languages.target) == ("pt", "en")
-        else settings.model_en_pt_repo
-        if (languages.source, languages.target) == ("en", "pt")
-        else "identity"
-    )
+    route = translation_route(languages.source, languages.target)
+    if not route:
+        model = "identity"
+    else:
+        model = "+".join(settings.model_repos[pair_name] for pair_name in route)
     duration = round(time.time() - started, 3)
     logger.info(
         "Translated %s chars %s->%s in %.2fs",
@@ -198,9 +201,10 @@ app = FastAPI(
     title="MicroTalk Translation Service",
     version="1.0.0",
     description=(
-        "Local Portuguese↔English neural machine translation using OPUS-MT / Marian "
-        "models. Runs on CPU, loads only one direction at a time, and never downloads "
-        "models during inference."
+        "Local Portuguese, English and French neural machine translation using "
+        "OPUS-MT / Marian models. Portuguese↔French is routed through English. "
+        "Runs on CPU, loads only one model at a time, and never downloads models "
+        "during inference."
     ),
     lifespan=lifespan,
 )
@@ -226,9 +230,16 @@ async def translation_status() -> dict[str, Any]:
 @app.get("/api/v1/translation/languages")
 async def translation_languages() -> dict[str, Any]:
     return {
-        "source": ["auto", "pt", "pt-PT", "pt-BR", "en"],
-        "target": ["en", "pt-PT", "pt-BR"],
-        "pairs": [{"source": "pt", "target": "en"}, {"source": "en", "target": "pt-PT"}],
+        "source": ["auto", "pt", "pt-PT", "pt-BR", "en", "fr"],
+        "target": ["en", "pt-PT", "pt-BR", "fr"],
+        "pairs": [
+            {"source": "pt", "target": "en"},
+            {"source": "en", "target": "pt-PT"},
+            {"source": "en", "target": "fr"},
+            {"source": "fr", "target": "en"},
+            {"source": "pt", "target": "fr"},
+            {"source": "fr", "target": "pt-PT"},
+        ],
     }
 
 

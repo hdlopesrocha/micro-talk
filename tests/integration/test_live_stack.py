@@ -54,6 +54,31 @@ def test_catalog_reports_every_service():
         assert "voices" in (catalog.get("tts") or {})
 
 
+def test_french_translation_when_models_are_installed():
+    with client() as http:
+        catalog = http.get("/api/v1/catalog").json()
+        routes = (catalog.get("translation_status") or {}).get("supported_routes") or {}
+        if not routes.get("pt-fr") or not routes.get("fr-pt"):
+            pytest.skip("French translation models are not installed")
+
+        for source, target, text in (
+            ("pt", "fr", "Este é um teste de tradução para francês."),
+            ("fr", "pt-PT", "Ceci est un test de traduction vers le portugais."),
+        ):
+            response = http.post(
+                "/api/v1/direct/translate",
+                json={
+                    "text": text,
+                    "source_language": source,
+                    "target_language": target,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["translated_text"].strip()
+            assert payload["target_language"] == target
+
+
 def test_translation_workflow_when_models_are_installed():
     with client() as http:
         catalog = http.get("/api/v1/catalog").json()

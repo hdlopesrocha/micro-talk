@@ -8,9 +8,15 @@ import type {
   LanguageCode,
   OutputLanguage,
   PDFDocument,
+  SummaryLanguage,
   Voice,
 } from "../api/types";
 import { formatBytes, languageLabel } from "../utils/format";
+import {
+  missingTranslationPairs,
+  translationRoute,
+  translationRouteLabel,
+} from "../utils/translation";
 import {
   resolvePageSelection,
   validatePageSelection,
@@ -49,12 +55,14 @@ const translationEnabled = ref(true);
 const targetLanguage = ref<OutputLanguage>("en");
 const summaryEnabled = ref(false);
 const summaryLength = ref<"short" | "medium" | "long">("medium");
-const summaryLanguage = ref<"auto" | OutputLanguage>("auto");
+const summaryLanguage = ref<"auto" | SummaryLanguage>("auto");
 const ttsEnabled = ref(true);
 const ttsVoice = ref("");
 const ttsSpeed = ref(1);
 const ttsFormat = ref<"mp3" | "wav">("mp3");
 const ttsNormalize = ref(false);
+const ttsPreservePhrases = ref(true);
+const ttsIgnoreLeadingNumbers = ref(false);
 const ttsTextSource = ref<"content" | "summary">("content");
 const voiceTouched = ref(false);
 const defaultsApplied = ref(false);
@@ -178,7 +186,7 @@ const voiceMismatch = computed(() => {
 const voiceWarning = computed(() => {
   if (!ttsEnabled.value || !selectedVoice.value) return "";
   if (!speechLanguage.value) {
-    return "The document language will be detected when the workflow starts. Choose a source language so the selected voice can be matched, or enable translation.";
+    return "Document language is set to auto. MicroTalk will detect it at workflow start and verify the selected voice; choose the document language in Source to lock the match before starting.";
   }
   if (!voiceMismatch.value) return "";
   const selected = selectedVoice.value;
@@ -193,47 +201,69 @@ const voiceWarning = computed(() => {
   )}. Pick the matching regional voice.`;
 });
 
-const translationRequiredPair = computed<string | null>(() => {
-  if (!translationEnabled.value) return null;
-  const source = sourceLanguage.value;
-  if (source === "auto") return null;
-  if (languageBase(source) === languageBase(targetLanguage.value)) return null;
-  return languageBase(source) === "pt" ? "pt-en" : "en-pt";
+const translationRequiredPairs = computed<string[]>(() => {
+  if (!translationEnabled.value || sourceLanguage.value === "auto") return [];
+  return translationRoute(sourceLanguage.value, targetLanguage.value);
 });
 const translationBlocked = computed(() => {
   if (!translationEnabled.value) return false;
   if (translationModelsMissing.value) return true;
-  const pair = translationRequiredPair.value;
-  return !!pair && translationPairs.value[pair] === false;
+  return (
+    missingTranslationPairs(translationRequiredPairs.value, translationPairs.value).length > 0
+  );
 });
 const translationAutoWarning = computed(() => {
   if (!translationEnabled.value || sourceLanguage.value !== "auto") return "";
   if (translationModelsMissing.value) return "";
-  // Translation only needs a model when the detected language differs from the target.
-  const pair = languageBase(targetLanguage.value) === "pt" ? "en-pt" : "pt-en";
-  if (translationPairs.value[pair] !== false) return "";
-  return `The ${pair.toUpperCase()} translation model is missing. Automatically detected ${languageLabel(
-    languageBase(pair) || "",
-  )} text will fail to translate; install the model or set the source language explicitly.`;
+  const missing = new Set<string>();
+  for (const source of ["pt", "en", "fr"]) {
+    const route = translationRoute(source, targetLanguage.value);
+    for (const pair of missingTranslationPairs(route, translationPairs.value)) {
+      missing.add(pair);
+    }
+  }
+  if (!missing.size) return "";
+  return `The ${[...missing].map((pair) => pair.toUpperCase()).join(
+    ", ",
+  )} translation model(s) required for some automatically detected source languages are missing. Install the models or set the source language explicitly.`;
 });
 const translationSelectionWarning = computed(() => {
-  const pair = translationRequiredPair.value;
-  if (!pair || translationModelsMissing.value) return "";
-  if (translationPairs.value[pair] !== false) return "";
-  return `The ${pair.toUpperCase()} translation model required for this language pair is not installed. Run ${installCommand(
-    "translation-service",
-  )}.`;
+  if (!translationEnabled.value || sourceLanguage.value === "auto") return "";
+  const missing = missingTranslationPairs(translationRequiredPairs.value, translationPairs.value);
+  if (!missing.length || translationModelsMissing.value) return "";
+  return `The ${missing.map((pair) => pair.toUpperCase()).join(
+    ", ",
+  )} translation model(s) required for ${translationRouteLabel(
+    translationRequiredPairs.value,
+  )} are not installed. Run ${installCommand("translation-service")}.`;
 });
+const translationPairStatus = computed(() =>
+  [
+    { pair: "pt-en", label: "PT → EN" },
+    { pair: "en-pt", label: "EN → PT" },
+    { pair: "en-fr", label: "EN → FR" },
+    { pair: "fr-en", label: "FR → EN" },
+  ].map((item) => ({
+    ...item,
+    ready: translationPairs.value[item.pair] !== false,
+  })),
+);
 
-const summaryModelLanguage = computed<string | null>(() => {
-  if (!summaryEnabled.value) return null;
-  if (summaryLanguage.value !== "auto") return languageBase(summaryLanguage.value);
+const summaryContentLanguage = computed<string | null>(() => {
   if (translationEnabled.value) return languageBase(targetLanguage.value);
   return languageBase(sourceLanguage.value);
 });
+const summaryContentUnsupported = computed(
+  () => summaryEnabled.value && summaryContentLanguage.value === "fr",
+);
+const summaryModelLanguage = computed<string | null>(() => {
+  if (!summaryEnabled.value) return null;
+  if (summaryLanguage.value !== "auto") return languageBase(summaryLanguage.value);
+  return summaryContentLanguage.value;
+});
 const summaryBlocked = computed(() => {
   if (!summaryEnabled.value) return false;
-  if (summaryModelsMissing.value) return true;
+  if (summaryContentUnsupported.value || summaryModelsMissing.value) return true;
   const language = summaryModelLanguage.value;
   if (!language) return false;
   return (props.catalog?.summary_status?.available || {})[language] === false;
@@ -312,7 +342,10 @@ const canSubmit = computed(() => {
   if (translationBlocked.value || summaryBlocked.value) return false;
   if (ttsEnabled.value) {
     if (!selectedVoice.value || !selectedVoice.value.available) return false;
-    if (!speechLanguage.value || voiceMismatch.value) return false;
+    // With translation off and document language auto, the backend detects the
+    // language after extraction. Defer the voice check to the pipeline instead
+    // of blocking a valid Portuguese job before it can start.
+    if (speechLanguage.value && voiceMismatch.value) return false;
   }
   return true;
 });
@@ -427,6 +460,8 @@ async function startWorkflow() {
       speed: ttsSpeed.value,
       format: ttsFormat.value,
       normalize_audio: ttsNormalize.value,
+      preserve_phrases: ttsPreservePhrases.value,
+      ignore_leading_numbers: ttsIgnoreLeadingNumbers.value,
       text_source: ttsTextSource.value,
     },
   };
@@ -456,8 +491,8 @@ function installCommand(service: string): string {
         <span class="eyebrow"><Icon name="sparkles" :size="14" /> Local AI document studio</span>
         <h1>Turn a PDF into something<br /><em>you can listen to.</em></h1>
         <p>
-          Extract, translate, summarize and narrate Portuguese or English documents with local
-          models. Nothing is sent to a cloud provider.
+          Extract, translate, summarize and narrate Portuguese, English or French documents with
+          local models. Nothing is sent to a cloud provider.
         </p>
       </div>
       <div class="hero-card">
@@ -466,7 +501,7 @@ function installCommand(service: string): string {
           <span>local engines</span>
         </div>
         <div class="hero-stat">
-          <strong>2</strong>
+          <strong>3</strong>
           <span>languages</span>
         </div>
         <div class="hero-stat">
@@ -644,7 +679,7 @@ function installCommand(service: string): string {
                 <span class="check-text">
                   Enable OCR for low-text pages
                   <small>
-                    Tesseract recognizes Portuguese and English. Slower, but works on scanned
+                    Tesseract recognizes Portuguese, English and French. Slower, but works on scanned
                     pages and images.
                   </small>
                 </span>
@@ -663,7 +698,7 @@ function installCommand(service: string): string {
                 v-model="text"
                 class="textarea large"
                 :maxlength="maxTextChars"
-                placeholder="Paste an article, report, transcript or any Portuguese or English text…"
+                placeholder="Paste an article, report, transcript or any Portuguese, English or French text…"
               ></textarea>
               <span class="field-hint">
                 Paragraph breaks are preserved through translation and used to build natural speech
@@ -671,6 +706,22 @@ function installCommand(service: string): string {
               </span>
             </div>
           </template>
+
+          <div class="field document-language">
+            <label for="document-language">Document language</label>
+            <select id="document-language" v-model="sourceLanguage" class="select">
+              <option value="auto">Detect automatically</option>
+              <option value="pt">Portuguese</option>
+              <option value="pt-PT">Portuguese (Portugal)</option>
+              <option value="pt-BR">Portuguese (Brazil)</option>
+              <option value="en">English</option>
+              <option value="fr">French</option>
+            </select>
+            <span class="field-hint">
+              Used for translation, OCR and voice matching. Choose it explicitly when translation
+              is off so the narration voice can be verified before the workflow starts.
+            </span>
+          </div>
         </section>
 
         <!-- 2. Pipeline -->
@@ -691,7 +742,7 @@ function installCommand(service: string): string {
                 <div class="option-icon blue"><Icon name="translate" :size="19" /></div>
                 <div class="grow">
                   <strong>Translate</strong>
-                  <p>Neural Portuguese ↔ English with the OPUS-MT local models.</p>
+                  <p>Neural Portuguese, English and French with the OPUS-MT local models.</p>
                 </div>
                 <button
                   class="switch"
@@ -703,25 +754,18 @@ function installCommand(service: string): string {
                 ></button>
               </div>
               <div v-if="translationEnabled" class="option-body">
-                <div class="grid two">
-                  <div class="field">
-                    <label for="source-language">Document language</label>
-                    <select id="source-language" v-model="sourceLanguage" class="select">
-                      <option value="auto">Detect automatically</option>
-                      <option value="pt">Portuguese</option>
-                      <option value="pt-PT">Portuguese (Portugal)</option>
-                      <option value="pt-BR">Portuguese (Brazil)</option>
-                      <option value="en">English</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label for="target-language">Translate into</label>
-                    <select id="target-language" v-model="targetLanguage" class="select">
-                      <option value="en">English</option>
-                      <option value="pt-PT">Portuguese (Portugal)</option>
-                      <option value="pt-BR">Portuguese (Brazil)</option>
-                    </select>
-                  </div>
+                <div class="field">
+                  <label for="target-language">Translate into</label>
+                  <select id="target-language" v-model="targetLanguage" class="select">
+                    <option value="en">English</option>
+                    <option value="pt-PT">Portuguese (Portugal)</option>
+                    <option value="pt-BR">Portuguese (Brazil)</option>
+                    <option value="fr">French</option>
+                  </select>
+                  <span class="field-hint">
+                    The document language is selected in Source and is shared by every pipeline
+                    stage.
+                  </span>
                 </div>
                 <div v-if="translationModelsMissing" class="alert warn">
                   <Icon name="alert" :size="17" />
@@ -731,10 +775,11 @@ function installCommand(service: string): string {
                     the workflow.
                   </span>
                 </div>
-                <div v-else class="tiny muted row">
+                <div v-else class="tiny muted row wrap">
                   <Icon name="check" :size="13" />
-                  {{ translationPairs["pt-en"] ? "PT → EN ready" : "PT → EN missing" }} ·
-                  {{ translationPairs["en-pt"] ? "EN → PT ready" : "EN → PT missing" }}
+                  <span v-for="(item, index) in translationPairStatus" :key="item.pair">
+                    {{ index ? " · " : "" }}{{ item.label }} {{ item.ready ? "ready" : "missing" }}
+                  </span>
                 </div>
                 <div v-if="translationAutoWarning" class="alert warn">
                   <Icon name="alert" :size="17" /><span>{{ translationAutoWarning }}</span>
@@ -788,7 +833,14 @@ function installCommand(service: string): string {
                     </select>
                   </div>
                 </div>
-                <div v-if="summaryModelsMissing" class="alert warn">
+                <div v-if="summaryContentUnsupported" class="alert warn">
+                  <Icon name="alert" :size="17" />
+                  <span>
+                    Summarization supports English and Portuguese only. Disable summarizing or
+                    translate the final text into English or Portuguese.
+                  </span>
+                </div>
+                <div v-else-if="summaryModelsMissing" class="alert warn">
                   <Icon name="alert" :size="17" />
                   <span>
                     Summary models are not installed. Run
@@ -836,7 +888,7 @@ function installCommand(service: string): string {
                       @change="voiceTouched = true"
                     >
                       <optgroup
-                        v-for="group in ['Portuguese (Portugal)', 'Portuguese (Brazil)', 'English (United States)']"
+                        v-for="group in ['Portuguese (Portugal)', 'Portuguese (Brazil)', 'French (France)', 'English (United States)']"
                         :key="group"
                       >
                         <template
@@ -844,7 +896,8 @@ function installCommand(service: string): string {
                           :key="voice.id"
                         >
                           <option :value="voice.id" :disabled="!voice.available">
-                            {{ voice.name }} · {{ voice.quality }}
+                            {{ voice.name }}<template v-if="voice.gender === 'female' || voice.gender === 'male'"> · {{ voice.gender }}</template>
+                            · {{ voice.quality }}
                             {{ voice.available ? "" : " (not installed)" }}
                           </option>
                         </template>
@@ -876,20 +929,14 @@ function installCommand(service: string): string {
                   </div>
                 </div>
 
-                <div v-if="!translationEnabled" class="field">
-                  <label for="tts-source-language">Spoken text language</label>
-                  <select id="tts-source-language" v-model="sourceLanguage" class="select">
-                    <option value="auto">Detect automatically</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="pt-PT">Portuguese (Portugal)</option>
-                    <option value="pt-BR">Portuguese (Brazil)</option>
-                    <option value="en">English</option>
-                  </select>
-                  <span class="field-hint">
-                    Piper voices are language-specific. Choose the document language if automatic
-                    detection is ambiguous.
-                  </span>
-                </div>
+                <p v-if="!translationEnabled" class="tiny muted">
+                  <Icon name="info" :size="13" />
+                  {{
+                    sourceLanguage === "auto"
+                      ? "Narration language will be detected at workflow start and checked against the selected voice."
+                      : `Narration language: ${languageLabel(sourceLanguage)}. Change it in Source if needed.`
+                  }}
+                </p>
 
                 <div v-if="ttsTextSource === 'summary' || summaryEnabled" class="field">
                   <span class="field-label">Narrate</span>
@@ -933,6 +980,23 @@ function installCommand(service: string): string {
                   </label>
                 </div>
 
+                <div class="grid two compact">
+                  <label class="check normalize">
+                    <input v-model="ttsPreservePhrases" type="checkbox" />
+                    <span class="check-text">
+                      Keep sentences whole
+                      <small>Don't split long sentences at commas, so phrases stay intact.</small>
+                    </span>
+                  </label>
+                  <label class="check normalize">
+                    <input v-model="ttsIgnoreLeadingNumbers" type="checkbox" />
+                    <span class="check-text">
+                      Ignore leading numbers
+                      <small>Drop Bible-style verse numbers such as “1 No princípio…” before narration.</small>
+                    </span>
+                  </label>
+                </div>
+
                 <div v-if="voiceWarning" class="alert warn">
                   <Icon name="alert" :size="17" /><span>{{ voiceWarning }}</span>
                 </div>
@@ -945,7 +1009,7 @@ function installCommand(service: string): string {
                 </div>
                 <p class="tiny muted pitch-note">
                   <Icon name="info" :size="13" /> Piper does not support pitch shifting, so the
-                  workflow intentionally exposes speed, loudness and voice choice only.
+                  workflow exposes speed, loudness, voice and text handling instead.
                 </p>
               </div>
             </div>
@@ -1396,6 +1460,11 @@ function installCommand(service: string): string {
 .option-icon.amber {
   background: var(--amber-soft);
   color: var(--amber);
+}
+
+.document-language {
+  margin-top: 16px;
+  max-width: 460px;
 }
 
 .option-body {

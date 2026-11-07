@@ -7,6 +7,7 @@ import type {
   DirectTTSResult,
   LanguageCode,
   OutputLanguage,
+  SummaryLanguage,
   SummaryResult,
   TranslationResult,
   Voice,
@@ -14,6 +15,11 @@ import type {
 import { copyToClipboard } from "../utils/clipboard";
 import { downloadText } from "../utils/download";
 import { countWords, formatDuration, languageLabel } from "../utils/format";
+import {
+  missingTranslationPairs,
+  translationRoute,
+  translationRouteLabel,
+} from "../utils/translation";
 import AudioPlayer from "./AudioPlayer.vue";
 import Icon from "./Icon.vue";
 
@@ -28,7 +34,7 @@ const tools: Array<{ id: Tool; label: string; icon: string; description: string 
     id: "translate",
     label: "Translate",
     icon: "translate",
-    description: "Portuguese ↔ English with the local OPUS-MT models.",
+    description: "Portuguese, English and French with the local OPUS-MT models.",
   },
   {
     id: "summary",
@@ -57,7 +63,7 @@ const translating = ref(false);
 const translationError = ref("");
 
 const summarySource = ref<LanguageCode>("auto");
-const summaryLanguage = ref<OutputLanguage>("en");
+const summaryLanguage = ref<SummaryLanguage>("en");
 const summaryLength = ref<"short" | "medium" | "long">("medium");
 const summary = ref<SummaryResult | null>(null);
 const summarizing = ref(false);
@@ -67,6 +73,8 @@ const ttsVoice = ref("");
 const ttsSpeed = ref(1);
 const ttsFormat = ref<"mp3" | "wav">("mp3");
 const ttsNormalize = ref(false);
+const ttsPreservePhrases = ref(true);
+const ttsIgnoreLeadingNumbers = ref(false);
 const ttsResult = ref<DirectTTSResult | null>(null);
 const ttsNormalizeUsed = ref(false);
 const ttsJobId = ref("");
@@ -107,6 +115,18 @@ const summaryModelsMissing = computed(() => {
   const available = status.available || {};
   return Object.values(available).length > 0 && !Object.values(available).some(Boolean);
 });
+const translationPairs = computed(() => props.catalog?.translation_status?.supported_pairs || {});
+const translationRequiredPairs = computed(() =>
+  translateSource.value === "auto"
+    ? []
+    : translationRoute(translateSource.value, translateTarget.value),
+);
+const translationMissingPairs = computed(() =>
+  missingTranslationPairs(translationRequiredPairs.value, translationPairs.value),
+);
+const translationBlocked = computed(
+  () => translationModelsMissing.value || translationMissingPairs.value.length > 0,
+);
 const ttsModelsMissing = computed(
   () => !props.catalogLoading && voices.value.length > 0 && availableVoices.value.length === 0,
 );
@@ -134,7 +154,9 @@ watch(
     if (!catalog || defaultsApplied.value) return;
     defaultsApplied.value = true;
     translateTarget.value = catalog.defaults?.translation_target || "en";
-    summaryLanguage.value = catalog.defaults?.translation_target || "en";
+    const preferredSummary = catalog.defaults?.translation_target;
+    summaryLanguage.value =
+      preferredSummary === "pt-PT" || preferredSummary === "pt-BR" ? preferredSummary : "en";
     summaryLength.value = catalog.defaults?.summary_length || "medium";
     ttsSpeed.value = catalog.defaults?.tts_speed || 1;
     ttsFormat.value = catalog.defaults?.tts_format || "mp3";
@@ -176,7 +198,7 @@ function useAsSource(value: string) {
 }
 
 async function runTranslation() {
-  if (translating.value || translationModelsMissing.value) return;
+  if (translating.value || translationBlocked.value) return;
   if (!sourceText.value.trim()) {
     translationError.value = "Paste some text to translate.";
     return;
@@ -255,6 +277,8 @@ async function runTts() {
       speed: ttsSpeed.value,
       format: ttsFormat.value,
       normalize_audio: ttsNormalize.value,
+      preserve_phrases: ttsPreservePhrases.value,
+      ignore_leading_numbers: ttsIgnoreLeadingNumbers.value,
     });
     if (generation !== pollGeneration) return;
     ttsResult.value = created;
@@ -393,7 +417,7 @@ function delay(milliseconds: number): Promise<void> {
           v-model="sourceText"
           class="textarea large tools-text"
           :maxlength="maxChars"
-          placeholder="Paste Portuguese or English text here…"
+          placeholder="Paste Portuguese, English or French text here…"
         ></textarea>
       </div>
 
@@ -408,6 +432,7 @@ function delay(milliseconds: number): Promise<void> {
               <option value="pt-PT">Portuguese (Portugal)</option>
               <option value="pt-BR">Portuguese (Brazil)</option>
               <option value="en">English</option>
+              <option value="fr">French</option>
             </select>
           </div>
           <div class="field">
@@ -416,10 +441,11 @@ function delay(milliseconds: number): Promise<void> {
               <option value="en">English</option>
               <option value="pt-PT">Portuguese (Portugal)</option>
               <option value="pt-BR">Portuguese (Brazil)</option>
+              <option value="fr">French</option>
             </select>
           </div>
           <div class="run-cell">
-            <button class="btn primary" type="button" :disabled="translating || !sourceText.trim() || translationModelsMissing" @click="runTranslation">
+            <button class="btn primary" type="button" :disabled="translating || !sourceText.trim() || translationBlocked" @click="runTranslation">
               <span v-if="translating" class="spinner"></span>
               <Icon v-else name="translate" :size="17" />
               {{ translating ? "Translating…" : "Translate" }}
@@ -430,6 +456,14 @@ function delay(milliseconds: number): Promise<void> {
         <div v-if="translationModelsMissing" class="alert warn">
           <Icon name="alert" :size="17" />
           <span>Translation models are not installed. Run <code>docker compose run --rm translation-service download-models</code>.</span>
+        </div>
+        <div v-else-if="translationMissingPairs.length" class="alert warn">
+          <Icon name="alert" :size="17" />
+          <span>
+            The {{ translationMissingPairs.map((pair) => pair.toUpperCase()).join(", ") }} model(s)
+            required for {{ translationRouteLabel(translationRequiredPairs) }} are missing. Run
+            <code>docker compose run --rm translation-service download-models</code>.
+          </span>
         </div>
         <div v-if="translationError" class="alert error" role="alert">
           <Icon name="alert" :size="17" /><span>{{ translationError }}</span>
@@ -559,7 +593,8 @@ function delay(milliseconds: number): Promise<void> {
             <select id="quick-voice" v-model="ttsVoice" class="select">
               <optgroup v-for="group in voiceGroups" :key="group.name" :label="group.name">
                 <option v-for="voice in group.voices" :key="voice.id" :value="voice.id" :disabled="!voice.available">
-                  {{ voice.name }} · {{ voice.quality }}{{ voice.available ? "" : " (not installed)" }}
+                  {{ voice.name }}<template v-if="voice.gender === 'female' || voice.gender === 'male'"> · {{ voice.gender }}</template>
+                  · {{ voice.quality }}{{ voice.available ? "" : " (not installed)" }}
                 </option>
               </optgroup>
             </select>
@@ -590,6 +625,23 @@ function delay(milliseconds: number): Promise<void> {
               {{ ttsBusy ? "Narrating…" : "Narrate" }}
             </button>
           </div>
+        </div>
+
+        <div class="tts-options">
+          <label class="check tts-normalize">
+            <input v-model="ttsPreservePhrases" type="checkbox" />
+            <span class="check-text">
+              Keep sentences whole
+              <small>Don't split long sentences at commas.</small>
+            </span>
+          </label>
+          <label class="check tts-normalize">
+            <input v-model="ttsIgnoreLeadingNumbers" type="checkbox" />
+            <span class="check-text">
+              Ignore leading numbers
+              <small>Drop Bible-style verse numbers like “1 No princípio…”.</small>
+            </span>
+          </label>
         </div>
 
         <div v-if="ttsModelsMissing" class="alert warn">
@@ -781,6 +833,14 @@ function delay(milliseconds: number): Promise<void> {
   padding-bottom: 10px;
 }
 
+.tts-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
 .run-cell {
   display: flex;
   align-items: center;
@@ -899,7 +959,8 @@ code {
   }
   .settings-grid,
   .summary-settings,
-  .tts-settings {
+  .tts-settings,
+  .tts-options {
     grid-template-columns: 1fr;
   }
   .run-cell {

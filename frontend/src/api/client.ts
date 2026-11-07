@@ -8,6 +8,7 @@ import type {
   LanguageCode,
   OutputLanguage,
   PDFDocument,
+  SummaryLanguage,
   SummaryResult,
   TTSTimeline,
   TranslationResult,
@@ -216,7 +217,7 @@ export const api = {
 
   async directSummarize(payload: {
     text: string;
-    language: OutputLanguage;
+    language: SummaryLanguage;
     source_language: LanguageCode;
     length: "short" | "medium" | "long";
   }): Promise<SummaryResult> {
@@ -233,6 +234,8 @@ export const api = {
     speed: number;
     format: "mp3" | "wav";
     normalize_audio: boolean;
+    preserve_phrases: boolean;
+    ignore_leading_numbers: boolean;
   }): Promise<DirectTTSResult> {
     return apiFetch("/api/v1/direct/tts", { method: "POST", body: jsonBody(payload) });
   },
